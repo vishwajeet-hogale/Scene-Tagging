@@ -4,8 +4,8 @@
 #SBATCH --error=logs/tag_scenarios_%j.err
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:v100-sxm2:1
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=32G
 #SBATCH --time=8:00:00
 
 # Load necessary modules
