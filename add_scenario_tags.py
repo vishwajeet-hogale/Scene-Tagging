@@ -899,6 +899,8 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
       - ego_segment_idx: which segment ego sits on (None if we can't tell)
       - num_segments_in_bev: debug count of lane segments intersecting the BEV crop
       - num_connectors_in_bev: debug count of connector segments intersecting the BEV crop
+            - ego_connector_choice_count: number of related connector choices sharing
+                    a predecessor or successor neighborhood with the ego connector
     """
     segments = _get_lane_segments(data)
 
@@ -920,10 +922,22 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
         "dist_to_nearest_connector_m": None,
         "num_segments_in_bev": 0,
         "num_connectors_in_bev": 0,
+        "ego_connector_choice_count": 0,
+        "ego_connector_related_connectors": 0,
+        "ego_connector_pred_fanout_max": 0,
+        "ego_connector_succ_fanin_max": 0,
     }
 
     if len(segments) == 0:
         return base
+
+    n = len(segments)
+    lsls_value = data.get("topology_lsls")
+    if lsls_value is None:
+        lsls_value = _get_annotation_dict(data).get("topology_lsls", [])
+    lsls = _to_numpy_matrix(lsls_value)
+    has_graph = lsls.size > 0 and lsls.shape[0] >= n and lsls.shape[1] >= n
+    lsls_bin = (lsls[:n, :n] > 0).astype(np.int32) if has_graph else None
 
     connector_flags = [
         bool(seg.get("is_intersection_or_connector", False)) for seg in segments
@@ -942,10 +956,12 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
     n_seg_in_bev = 0
     n_conn_in_bev = 0
     forward_x_min = max(-2.0, x_min)
-    for seg, is_conn in zip(segments, connector_flags):
+    in_bev_mask = np.zeros(n, dtype=bool)
+    for idx, (seg, is_conn) in enumerate(zip(segments, connector_flags)):
         pts_in_bev = _segment_points_in_bev_box(seg, x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max)
         if len(pts_in_bev) == 0:
             continue
+        in_bev_mask[idx] = True
         n_seg_in_bev += 1
         if not is_conn:
             continue
@@ -964,6 +980,41 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
     base["num_segments_in_bev"] = n_seg_in_bev
     base["num_connectors_in_bev"] = n_conn_in_bev
 
+    if ego_idx is not None and base["ego_on_connector"] and lsls_bin is not None and in_bev_mask[ego_idx]:
+        pred_fanout_max = 0
+        succ_fanin_max = 0
+        related_connectors = {int(ego_idx)}
+
+        predecessors = np.where(lsls_bin[:, ego_idx] > 0)[0].tolist()
+        successors = np.where(lsls_bin[ego_idx] > 0)[0].tolist()
+
+        for pred_idx in predecessors:
+            sibling_connectors = [
+                int(conn_idx)
+                for conn_idx in np.where(lsls_bin[pred_idx] > 0)[0].tolist()
+                if connector_flags[conn_idx] and in_bev_mask[conn_idx]
+            ]
+            if not sibling_connectors:
+                continue
+            pred_fanout_max = max(pred_fanout_max, len(sibling_connectors))
+            related_connectors.update(sibling_connectors)
+
+        for succ_idx in successors:
+            sibling_connectors = [
+                int(conn_idx)
+                for conn_idx in np.where(lsls_bin[:, succ_idx] > 0)[0].tolist()
+                if connector_flags[conn_idx] and in_bev_mask[conn_idx]
+            ]
+            if not sibling_connectors:
+                continue
+            succ_fanin_max = max(succ_fanin_max, len(sibling_connectors))
+            related_connectors.update(sibling_connectors)
+
+        base["ego_connector_choice_count"] = len(related_connectors)
+        base["ego_connector_related_connectors"] = len(related_connectors)
+        base["ego_connector_pred_fanout_max"] = pred_fanout_max
+        base["ego_connector_succ_fanin_max"] = succ_fanin_max
+
     return base
 
 
@@ -971,11 +1022,11 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
     """
     Per-frame topology tagging:
 
-      - high:   ego is currently on an intersection/connector lane_segment
-                (is_intersection_or_connector == True). Ego is *inside* the
-                complex area.
-      - medium: ego's current segment is simple, but a connector segment is
-                within --topo_medium_dist_m forward of ego. Ego is approaching.
+      - high:   ego is on a connector and the local connector neighborhood is
+                truly complex, with several related connector choices or a dense
+                connector cluster in the BEV crop.
+      - medium: ego is on a simple connector/turn, or a connector segment is
+                within --topo_medium_dist_m forward of ego.
       - low:    no connector within --topo_medium_dist_m forward of ego.
     """
     stats = _lane_segment_graph_stats(data, args)
@@ -984,28 +1035,41 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
         return "topology_unknown", {
             "value": None,
             "confidence": 0.0,
-            "method": "ego_on_connector",
+            "method": "ego_connector_neighborhood",
             "status": "no_lane_segments",
             "graph": stats,
         }
 
     dist = stats["dist_to_nearest_connector_m"]
+    ego_choice_count = int(stats.get("ego_connector_choice_count", 0))
 
     if stats["ego_on_connector"]:
-        tag = "high topological complexity"
-        score = 0.9
+        if (
+            ego_choice_count >= args.topo_high_choice_count
+            or stats["num_connectors_in_bev"] >= args.topo_high_num_connectors
+        ):
+            tag = "high topological complexity"
+            score = 0.9
+            decision = "complex_connector_neighborhood"
+        else:
+            tag = "medium topological complexity"
+            score = 0.6
+            decision = "simple_connector_neighborhood"
     elif dist is not None and dist <= args.topo_medium_dist_m:
         tag = "medium topological complexity"
         score = 0.5
+        decision = "connector_ahead"
     else:
         tag = "low topological complexity"
         score = 0.1
+        decision = "no_connector_nearby"
 
     meta = {
         "value": float(score),
         "confidence": 1.0 if stats["ego_segment_idx"] is not None else 0.3,
-        "method": "ego_on_connector",
+        "method": "ego_connector_neighborhood",
         "status": "ok",
+        "decision_source": decision,
         "graph": stats,
         "classification_thresholds": {
             "bev_crop_m": {
@@ -1015,6 +1079,8 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
                 "y_max": float(args.topo_bev_y_max),
             },
             "medium_dist_m": args.topo_medium_dist_m,
+            "high_choice_count": args.topo_high_choice_count,
+            "high_num_connectors": args.topo_high_num_connectors,
         },
     }
     return tag, meta
@@ -2193,7 +2259,15 @@ def main():
     parser.add_argument("--topo_medium_dist_m", type=float, default=20.0,
                         help="If ego is NOT currently on a connector segment but a connector "
                              "exists within this forward distance (m), the frame is tagged "
-                             "'medium topological complexity'. Beyond this distance -> 'low'.")
+                            "'medium topological complexity'. Beyond this distance -> 'low'.")
+    parser.add_argument("--topo_high_choice_count", type=int, default=3,
+                        help="If ego is on a connector and at least this many related "
+                            "connector choices share its predecessor/successor neighborhood, "
+                            "tag the frame as high topological complexity.")
+    parser.add_argument("--topo_high_num_connectors", type=int, default=4,
+                        help="If ego is on a connector and the BEV crop contains at least "
+                            "this many connector segments, tag the frame as high topological "
+                            "complexity.")
 
     # lighting params
     parser.add_argument("--light_dark_thresh", type=float, default=0.16)
