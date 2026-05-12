@@ -25,6 +25,24 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    from add_scenario_tags import (
+        _get_lane_segments,
+        get_camera_projection_params,
+        project_lane_xyz_to_image_uv,
+        resolve_image_path,
+    )
+except Exception:
+    _get_lane_segments = None
+    get_camera_projection_params = None
+    project_lane_xyz_to_image_uv = None
+    resolve_image_path = None
+
+try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -124,6 +142,24 @@ LANE_SEG_TAG_FAMILIES: Dict[str, List[str]] = {
         "curvature_unknown",
     ],
 }
+
+EXAMPLE_TAG_FAMILIES: Dict[str, List[str]] = {
+    "curvature": LANE_SEG_TAG_FAMILIES["curvature_tag"],
+    **TAG_FAMILIES,
+}
+
+GT_CURVATURE_COLORS_BGR: Dict[str, Tuple[int, int, int]] = {
+    "straight": (44, 160, 44),
+    "straight with an angle": (0, 160, 240),
+    "curve left": (180, 119, 31),
+    "curve right": (40, 39, 214),
+    "sharp left": (90, 45, 10),
+    "sharp right": (5, 5, 92),
+    "curvature_unknown": (136, 136, 136),
+}
+
+GT_DEFAULT_ROAD_BGR = (90, 220, 90)
+GT_DEFAULT_CONNECTOR_BGR = (0, 165, 255)
 
 
 def _resolve_family(tag: str) -> Optional[str]:
@@ -301,6 +337,250 @@ def analyze_files(files: List[Path]) -> Dict[str, Any]:
             for k, v in combo_counts.most_common(25)
         ],
     }
+
+
+def _slugify_tag(tag: str) -> str:
+    return normalize_tag(tag).replace("/", "-").replace(" ", "_")
+
+
+def collect_example_candidates(files: List[Path]) -> Dict[str, Dict[str, List[Path]]]:
+    candidates: Dict[str, Dict[str, List[Path]]] = {
+        fam: {} for fam in EXAMPLE_TAG_FAMILIES
+    }
+
+    for path in files:
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        if not isinstance(data, dict):
+            continue
+
+        raw_tags = data.get("scenario_tags")
+        if isinstance(raw_tags, list):
+            normalized_tags = sorted({
+                normalize_tag(t)
+                for t in raw_tags
+                if isinstance(t, str) and t.strip()
+            })
+            for tag in normalized_tags:
+                family = _resolve_family(tag)
+                if family is None:
+                    continue
+                candidates.setdefault(family, {}).setdefault(tag, []).append(path)
+
+        lane_segs = (data.get("scenario_meta") or {}).get("lane_segments")
+        if isinstance(lane_segs, list):
+            curv_tags = sorted({
+                normalize_tag(seg.get("curvature_tag") or "curvature_unknown")
+                for seg in lane_segs
+                if isinstance(seg, dict)
+            })
+            for tag in curv_tags:
+                candidates["curvature"].setdefault(tag, []).append(path)
+
+    deduped: Dict[str, Dict[str, List[Path]]] = {}
+    for family, tag_map in candidates.items():
+        deduped[family] = {}
+        for tag, paths in tag_map.items():
+            seen = set()
+            unique_paths: List[Path] = []
+            for path in paths:
+                if path in seen:
+                    continue
+                seen.add(path)
+                unique_paths.append(path)
+            deduped[family][tag] = unique_paths
+    return deduped
+
+
+def select_example_paths(
+    candidates: Dict[str, Dict[str, List[Path]]],
+    examples_per_tag: int,
+) -> Dict[str, Dict[str, List[Path]]]:
+    selected: Dict[str, Dict[str, List[Path]]] = {}
+
+    for family, family_tags in EXAMPLE_TAG_FAMILIES.items():
+        tag_candidates = candidates.get(family, {})
+        used_paths = set()
+        selected[family] = {}
+
+        ordered_tags = [tag for tag in family_tags if tag in tag_candidates]
+        for tag in tag_candidates:
+            if tag not in ordered_tags:
+                ordered_tags.append(tag)
+
+        for tag in ordered_tags:
+            paths = tag_candidates.get(tag, [])
+            chosen: List[Path] = []
+            for path in paths:
+                if path in used_paths:
+                    continue
+                chosen.append(path)
+                if len(chosen) >= examples_per_tag:
+                    break
+            if len(chosen) < examples_per_tag:
+                for path in paths:
+                    if path in chosen:
+                        continue
+                    chosen.append(path)
+                    if len(chosen) >= examples_per_tag:
+                        break
+            if chosen:
+                selected[family][tag] = chosen
+                used_paths.update(chosen)
+
+    return selected
+
+
+def _lane_overlay_color(
+    family: str,
+    target_tag: str,
+    lane_seg_meta: Dict[Any, Dict[str, Any]],
+    seg: Dict[str, Any],
+) -> Tuple[int, int, int]:
+    if family == "curvature":
+        seg_id = seg.get("id")
+        lane_tag = normalize_tag(
+            (lane_seg_meta.get(seg_id) or {}).get("curvature_tag") or "curvature_unknown"
+        )
+        return GT_CURVATURE_COLORS_BGR.get(lane_tag, GT_CURVATURE_COLORS_BGR["curvature_unknown"])
+
+    if bool(seg.get("is_intersection_or_connector", False)):
+        return GT_DEFAULT_CONNECTOR_BGR
+    return GT_DEFAULT_ROAD_BGR
+
+
+def render_tag_example_image(
+    json_path: Path,
+    family: str,
+    tag: str,
+    output_path: Path,
+    camera_name: str,
+    image_ext: str,
+) -> bool:
+    if (
+        cv2 is None
+        or resolve_image_path is None
+        or _get_lane_segments is None
+        or get_camera_projection_params is None
+        or project_lane_xyz_to_image_uv is None
+    ):
+        return False
+
+    try:
+        with json_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False
+
+    if not isinstance(data, dict):
+        return False
+
+    image_path = resolve_image_path(json_path, data, camera_name=camera_name, ext=image_ext)
+    if not image_path.exists():
+        return False
+
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return False
+
+    lane_segments = _get_lane_segments(data)
+    lane_seg_meta_list = ((data.get("scenario_meta") or {}).get("lane_segments") or [])
+    lane_seg_meta = {
+        entry.get("id"): entry
+        for entry in lane_seg_meta_list
+        if isinstance(entry, dict) and entry.get("id") is not None
+    }
+
+    proj_params = get_camera_projection_params(data, camera_name)
+    if proj_params is not None:
+        img_h, img_w = image.shape[:2]
+        for seg in lane_segments:
+            centerline = seg.get("centerline")
+            try:
+                arr = np.array(centerline, dtype=np.float64)
+            except Exception:
+                continue
+            if arr.ndim != 2 or arr.shape[0] < 2 or arr.shape[1] < 3:
+                continue
+            uv = project_lane_xyz_to_image_uv(arr[:, :3], *proj_params)
+            mask = (
+                np.isfinite(uv[:, 0]) & np.isfinite(uv[:, 1]) &
+                (uv[:, 0] >= 0) & (uv[:, 0] < img_w) &
+                (uv[:, 1] >= 0) & (uv[:, 1] < img_h)
+            )
+            pts = uv[mask]
+            if len(pts) < 2:
+                continue
+            color = _lane_overlay_color(family, tag, lane_seg_meta, seg)
+            cv2.polylines(
+                image,
+                [np.round(pts).astype(np.int32).reshape(-1, 1, 2)],
+                isClosed=False,
+                color=color,
+                thickness=2,
+                lineType=cv2.LINE_AA,
+            )
+
+    overlay = image.copy()
+    header_h = 72
+    cv2.rectangle(overlay, (0, 0), (image.shape[1], header_h), (0, 0, 0), -1)
+    image = cv2.addWeighted(overlay, 0.45, image, 0.55, 0.0)
+
+    scenario_tags = sorted({
+        normalize_tag(t)
+        for t in data.get("scenario_tags", [])
+        if isinstance(t, str) and t.strip()
+    })
+    scenario_text = ", ".join(scenario_tags) if scenario_tags else "<none>"
+    line1 = f"{family.upper()} | {tag}"
+    line2 = f"frame={json_path.stem} | camera={camera_name}"
+    line3 = f"scenario_tags: {scenario_text}"
+    cv2.putText(image, line1, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(image, line2, (12, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.50,
+                (230, 230, 230), 1, cv2.LINE_AA)
+    cv2.putText(image, line3[:120], (12, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                (220, 220, 220), 1, cv2.LINE_AA)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return bool(cv2.imwrite(str(output_path), image))
+
+
+def export_tag_example_images(
+    files: List[Path],
+    output_dir: Path,
+    examples_per_tag: int,
+    camera_name: str,
+    image_ext: str,
+) -> None:
+    if cv2 is None or resolve_image_path is None:
+        print("[WARN] cv2 or add_scenario_tags helpers unavailable — skipping exemplar images.")
+        return
+
+    candidates = collect_example_candidates(files)
+    selections = select_example_paths(candidates, examples_per_tag=examples_per_tag)
+
+    examples_root = output_dir / "examples"
+    wrote = 0
+    for family, tag_map in selections.items():
+        for tag, paths in tag_map.items():
+            tag_dir = examples_root / family / _slugify_tag(tag)
+            for idx, json_path in enumerate(paths, 1):
+                out_name = f"{idx:02d}_{json_path.stem}.jpg"
+                if render_tag_example_image(
+                    json_path=json_path,
+                    family=family,
+                    tag=tag,
+                    output_path=tag_dir / out_name,
+                    camera_name=camera_name,
+                    image_ext=image_ext,
+                ):
+                    wrote += 1
+    print(f"[WROTE] exemplar images: {wrote} files under {examples_root}")
 
 
 # ---------------------------------------------------------------------------
@@ -960,6 +1240,14 @@ def main() -> None:
                         help="Skip PNG generation (write CSVs and JSON only).")
     parser.add_argument("--top_tags", type=int, default=40,
                         help="Maximum tags shown in the tag-counts bar chart.")
+    parser.add_argument("--skip_examples", action="store_true",
+                        help="Skip exemplar image export.")
+    parser.add_argument("--examples_per_tag", type=int, default=5,
+                        help="Maximum number of exemplar images to export per tag.")
+    parser.add_argument("--camera_name", type=str, default="ring_front_center",
+                        help="Camera used for exemplar image export.")
+    parser.add_argument("--image_ext", type=str, default="jpg",
+                        help="Image extension used when resolving exemplar image paths.")
     args = parser.parse_args()
 
     root = Path(args.target_root)
@@ -990,6 +1278,15 @@ def main() -> None:
 
     if not args.skip_plots:
         generate_all_plots(summary, output_dir / "plots")
+
+    if not args.skip_examples:
+        export_tag_example_images(
+            files,
+            output_dir=output_dir,
+            examples_per_tag=args.examples_per_tag,
+            camera_name=args.camera_name,
+            image_ext=args.image_ext,
+        )
 
     # ------------------------------------------------------------------
     # Lane-segment level analysis
