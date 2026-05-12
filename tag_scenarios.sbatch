@@ -15,13 +15,13 @@ module load cuda/12.1
 source ~/.bashrc
 conda activate lanesegnet
 
-# cd /home/hogale.v/Lane_Topology/Scene_Tagging
+cd /home/hogale.v/Lane_Topology/Scene_Tagging
 
-# python add_scenario_tags.py \
-#   --dataset_root /scratch/hogale.v/OpenLaneV2/val
+python add_scenario_tags.py \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val
 
-# python add_scenario_tags.py \
-#   --dataset_root /scratch/hogale.v/OpenLaneV2/train
+python add_scenario_tags.py \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/train
 
 cd /home/hogale.v/Lane_Topology/OLV2_Scenario_Tag_Gen
 
