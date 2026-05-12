@@ -18,5 +18,5 @@ conda activate lanesegnet
 cd /home/hogale.v/Lane_Topology/Scene_Tagging
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10043 \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10093 \
   --dry_run
