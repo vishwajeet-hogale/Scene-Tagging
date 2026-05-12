@@ -827,16 +827,22 @@ def _segment_centerline_xy(segment: Dict[str, Any]) -> np.ndarray:
     return polyline_to_xy(centerline)
 
 
-def _is_segment_in_radius(segment: Dict[str, Any], radius_m: float) -> bool:
-    """
-    True if any point on the segment's centerline is within `radius_m` of
-    the ego origin (Euclidean distance in ego frame, xy-plane).
-    """
+def _segment_points_in_bev_box(
+    segment: Dict[str, Any],
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+) -> np.ndarray:
+    """Return centerline points that fall inside an ego-frame BEV crop."""
     xy = _segment_centerline_xy(segment)
     if len(xy) == 0:
-        return False
-    dists = np.linalg.norm(xy[:, :2], axis=1)
-    return bool(np.any(dists <= radius_m))
+        return np.zeros((0, 2), dtype=np.float64)
+    mask = (
+        (xy[:, 0] >= x_min) & (xy[:, 0] <= x_max) &
+        (xy[:, 1] >= y_min) & (xy[:, 1] <= y_max)
+    )
+    return xy[mask]
 
 
 def _find_ego_segment_idx(segments: List[Dict[str, Any]]) -> Optional[int]:
@@ -888,20 +894,32 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
     Returns:
       - ego_on_connector: ego's current lane_segment has is_intersection_or_connector=True
       - dist_to_nearest_connector_m: forward distance (along ego +x) from ego origin
-          to the closest point on any connector segment's centerline. None if no
-          connector exists in the scene.
+          to the closest point on any connector segment's centerline inside the
+          BEV crop. None if no connector exists in the crop.
       - ego_segment_idx: which segment ego sits on (None if we can't tell)
-      - num_connectors_in_radius: debug count of connector segments within radius
+      - num_segments_in_bev: debug count of lane segments intersecting the BEV crop
+      - num_connectors_in_bev: debug count of connector segments intersecting the BEV crop
     """
     segments = _get_lane_segments(data)
 
+    x_min = float(args.topo_bev_x_min)
+    x_max = float(args.topo_bev_x_max)
+    y_min = float(args.topo_bev_y_min)
+    y_max = float(args.topo_bev_y_max)
+
     base = {
         "num_segments": len(segments),
-        "radius_m": args.topo_radius_m,
+        "bev_crop_m": {
+            "x_min": x_min,
+            "x_max": x_max,
+            "y_min": y_min,
+            "y_max": y_max,
+        },
         "ego_segment_idx": None,
         "ego_on_connector": False,
         "dist_to_nearest_connector_m": None,
-        "num_connectors_in_radius": 0,
+        "num_segments_in_bev": 0,
+        "num_connectors_in_bev": 0,
     }
 
     if len(segments) == 0:
@@ -916,32 +934,35 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
     if ego_idx is not None:
         base["ego_on_connector"] = connector_flags[ego_idx]
 
-    # Distance to the nearest connector segment along ego's forward path (+x).
-    # We measure from ego origin (0,0) to the closest centerline point on any
-    # connector segment whose x >= -2m (i.e., at or ahead of ego; the -2m slack
-    # handles the case where ego is right at the start of a connector).
+    # Distance to the nearest connector segment inside the ego-frame BEV crop.
+    # We still bias the search toward points at or ahead of ego by requiring
+    # x >= max(-2m, crop x_min); the -2m slack handles the case where ego is
+    # right at the start of a connector.
     min_forward_dist = float("inf")
-    n_conn_in_radius = 0
+    n_seg_in_bev = 0
+    n_conn_in_bev = 0
+    forward_x_min = max(-2.0, x_min)
     for seg, is_conn in zip(segments, connector_flags):
+        pts_in_bev = _segment_points_in_bev_box(seg, x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max)
+        if len(pts_in_bev) == 0:
+            continue
+        n_seg_in_bev += 1
         if not is_conn:
             continue
-        xy = _segment_centerline_xy(seg)
-        if len(xy) == 0:
-            continue
-        # forward mask: points at or ahead of ego
-        fwd = xy[xy[:, 0] >= -2.0]
+        n_conn_in_bev += 1
+        # forward mask: points at or ahead of ego, limited to the BEV crop
+        fwd = pts_in_bev[pts_in_bev[:, 0] >= forward_x_min]
         if len(fwd) == 0:
             continue
         dists = np.linalg.norm(fwd[:, :2], axis=1)
         d = float(np.min(dists))
         if d < min_forward_dist:
             min_forward_dist = d
-        if d <= args.topo_radius_m:
-            n_conn_in_radius += 1
 
     if np.isfinite(min_forward_dist):
         base["dist_to_nearest_connector_m"] = float(min_forward_dist)
-    base["num_connectors_in_radius"] = n_conn_in_radius
+    base["num_segments_in_bev"] = n_seg_in_bev
+    base["num_connectors_in_bev"] = n_conn_in_bev
 
     return base
 
@@ -987,7 +1008,12 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
         "status": "ok",
         "graph": stats,
         "classification_thresholds": {
-            "radius_m": args.topo_radius_m,
+            "bev_crop_m": {
+                "x_min": float(args.topo_bev_x_min),
+                "x_max": float(args.topo_bev_x_max),
+                "y_min": float(args.topo_bev_y_min),
+                "y_max": float(args.topo_bev_y_max),
+            },
             "medium_dist_m": args.topo_medium_dist_m,
         },
     }
@@ -2156,9 +2182,14 @@ def main():
     parser.add_argument("--viz_output_dir", type=str, default=None)
 
     # topology params
-    parser.add_argument("--topo_radius_m", type=float, default=50.0,
-                        help="Euclidean radius (m) around ego used only for the debug stat "
-                             "'num_connectors_in_radius'. Not used by the classifier.")
+    parser.add_argument("--topo_bev_x_min", type=float, default=-5.0,
+                        help="Topology BEV crop min x (m) in ego frame.")
+    parser.add_argument("--topo_bev_x_max", type=float, default=50.0,
+                        help="Topology BEV crop max x (m) in ego frame.")
+    parser.add_argument("--topo_bev_y_min", type=float, default=-25.0,
+                        help="Topology BEV crop min y (m) in ego frame.")
+    parser.add_argument("--topo_bev_y_max", type=float, default=25.0,
+                        help="Topology BEV crop max y (m) in ego frame.")
     parser.add_argument("--topo_medium_dist_m", type=float, default=20.0,
                         help="If ego is NOT currently on a connector segment but a connector "
                              "exists within this forward distance (m), the frame is tagged "

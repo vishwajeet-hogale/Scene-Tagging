@@ -1,0 +1,35 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.env
+
+
+*.err
+*.out
+*.tmp
+*.bak
+*.swp
+*.swo
+*.DS_Store
+.idea/
+
+# Ignore virtual environment directories
+venv/
+env/
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+# Ignore coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+
+# Ignore pytest cache
+.pytest_cache/
