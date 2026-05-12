@@ -1024,7 +1024,9 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
 
             - high:   ego is on a connector. Preserve the existing connector-neighborhood
                                 analysis as a stronger explanation signal, but entering the
-                                intersection is already enough to be high.
+                                intersection is already enough to be high. Also allow
+                                an immediate upcoming connector in the BEV crop to count
+                                as high for frames right at the intersection entry.
             - medium: ego is not yet on a connector, but a connector is either close
                                 ahead or simply visible inside the BEV crop.
             - low:    no connector is close ahead and none are visible inside the
@@ -1055,6 +1057,10 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
             decision = "complex_connector_neighborhood"
         else:
             decision = "ego_on_connector"
+    elif dist is not None and dist <= args.topo_high_dist_m:
+        tag = "high topological complexity"
+        score = 0.8
+        decision = "connector_immediate_ahead"
     elif dist is not None and dist <= args.topo_medium_dist_m:
         tag = "medium topological complexity"
         score = 0.5
@@ -1082,6 +1088,7 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
                 "y_min": float(args.topo_bev_y_min),
                 "y_max": float(args.topo_bev_y_max),
             },
+            "high_dist_m": args.topo_high_dist_m,
             "medium_dist_m": args.topo_medium_dist_m,
             "high_choice_count": args.topo_high_choice_count,
             "high_num_connectors": args.topo_high_num_connectors,
@@ -2261,6 +2268,10 @@ def main():
                         help="Topology BEV crop min y (m) in ego frame.")
     parser.add_argument("--topo_bev_y_max", type=float, default=25.0,
                         help="Topology BEV crop max y (m) in ego frame.")
+    parser.add_argument("--topo_high_dist_m", type=float, default=8.0,
+                        help="If ego is not yet on a connector but the nearest connector "
+                            "inside the BEV crop is within this distance (m), tag the "
+                            "frame as high topological complexity.")
     parser.add_argument("--topo_medium_dist_m", type=float, default=20.0,
                         help="If ego is NOT currently on a connector segment but a connector "
                              "exists within this forward distance (m), the frame is tagged "
