@@ -1022,12 +1022,13 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
     """
     Per-frame topology tagging:
 
-      - high:   ego is on a connector and the local connector neighborhood is
-                truly complex, with several related connector choices or a dense
-                connector cluster in the BEV crop.
-      - medium: ego is on a simple connector/turn, or a connector segment is
-                within --topo_medium_dist_m forward of ego.
-      - low:    no connector within --topo_medium_dist_m forward of ego.
+            - high:   ego is on a connector. Preserve the existing connector-neighborhood
+                                analysis as a stronger explanation signal, but entering the
+                                intersection is already enough to be high.
+            - medium: ego is not yet on a connector, but a connector is either close
+                                ahead or simply visible inside the BEV crop.
+            - low:    no connector is close ahead and none are visible inside the
+                                BEV crop.
     """
     stats = _lane_segment_graph_stats(data, args)
 
@@ -1042,23 +1043,26 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
 
     dist = stats["dist_to_nearest_connector_m"]
     ego_choice_count = int(stats.get("ego_connector_choice_count", 0))
+    connectors_in_bev = int(stats.get("num_connectors_in_bev", 0))
 
     if stats["ego_on_connector"]:
+        tag = "high topological complexity"
+        score = 0.9
         if (
             ego_choice_count >= args.topo_high_choice_count
-            or stats["num_connectors_in_bev"] >= args.topo_high_num_connectors
+            or connectors_in_bev >= args.topo_high_num_connectors
         ):
-            tag = "high topological complexity"
-            score = 0.9
             decision = "complex_connector_neighborhood"
         else:
-            tag = "medium topological complexity"
-            score = 0.6
-            decision = "simple_connector_neighborhood"
+            decision = "ego_on_connector"
     elif dist is not None and dist <= args.topo_medium_dist_m:
         tag = "medium topological complexity"
         score = 0.5
         decision = "connector_ahead"
+    elif connectors_in_bev > 0:
+        tag = "medium topological complexity"
+        score = 0.4
+        decision = "connector_visible_in_bev"
     else:
         tag = "low topological complexity"
         score = 0.1
@@ -1081,6 +1085,7 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
             "medium_dist_m": args.topo_medium_dist_m,
             "high_choice_count": args.topo_high_choice_count,
             "high_num_connectors": args.topo_high_num_connectors,
+            "bev_visible_connector_is_medium": True,
         },
     }
     return tag, meta
