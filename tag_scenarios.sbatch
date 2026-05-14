@@ -16,12 +16,28 @@ source ~/.bashrc
 conda activate lanesegnet
 
 cd /home/hogale.v/Lane_Topology/Scene_Tagging
+mkdir -p logs
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val \
+  --topo_bev_x_min -50.0 \
+  --topo_bev_x_max 50.0 \
+  --topo_bev_y_min -25.0 \
+  --topo_bev_y_max 25.0
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/train
+  --dataset_root /scratch/hogale.v/OpenLaneV2/train \
+  --topo_bev_x_min -50.0 \
+  --topo_bev_x_max 50.0 \
+  --topo_bev_y_min -25.0 \
+  --topo_bev_y_max 25.0
+
+python plot_scenario_tags.py \
+  --target_root /scratch/hogale.v/OpenLaneV2/val/10101 \
+  --output_dir ./analysis/scenario_tag_analysis_new_val \
+  --examples_per_tag 5 \
+  --camera_name ring_front_center \
+  --image_ext jpg
 
 cd /home/hogale.v/Lane_Topology/OLV2_Scenario_Tag_Gen
 

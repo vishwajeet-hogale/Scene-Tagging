@@ -16,7 +16,12 @@ source ~/.bashrc
 conda activate lanesegnet
 
 cd /home/hogale.v/Lane_Topology/Scene_Tagging
+mkdir -p logs
 
 python add_scenario_tags.py \
   --dataset_root /scratch/hogale.v/OpenLaneV2/val/10093 \
-  --dry_run
+  --dry_run \
+  --topo_bev_x_min -50.0 \
+  --topo_bev_x_max 50.0 \
+  --topo_bev_y_min -25.0 \
+  --topo_bev_y_max 25.0
