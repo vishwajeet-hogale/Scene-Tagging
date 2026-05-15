@@ -60,7 +60,6 @@ TAG_FAMILIES: Dict[str, List[str]] = {
     # It lives in scenario_meta.lane_segments, not scenario_tags.
     "topology": [
         "low topological complexity",
-        "medium topological complexity",
         "high topological complexity",
         "topology_unknown",
     ],
@@ -88,7 +87,6 @@ TAG_COLORS: Dict[str, str] = {
     "curvature_unknown": "#888888",
     # topology
     "low topological complexity": "#9ecae1",
-    "medium topological complexity": "#6baed6",
     "high topological complexity": "#08519c",
     "topology_unknown": "#bbbbbb",
     # lighting

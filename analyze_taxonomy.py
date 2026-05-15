@@ -63,7 +63,6 @@ except Exception:
 FRAME_TAG_FAMILIES = {
     "topology": [
         "low topological complexity",
-        "medium topological complexity",
         "high topological complexity",
         "topology_unknown",
     ],
@@ -331,7 +330,6 @@ TAG_COLORS = {
     "curvature_unknown": "#888888",
     # topology
     "low topological complexity": "#9ecae1",
-    "medium topological complexity": "#6baed6",
     "high topological complexity": "#08519c",
     "topology_unknown": "#888888",
     # lighting
@@ -917,7 +915,6 @@ def main() -> None:
         # Dropped the family prefix; shortened "topological complexity" to "topo".
         short_label_map = {
             "topology: low topological complexity": "low topo",
-            "topology: medium topological complexity": "med topo",
             "topology: high topological complexity": "high topo",
             "topology: topology_unknown": "topo_unknown",
             "lighting: well lit": "well lit",

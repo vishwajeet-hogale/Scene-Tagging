@@ -16,7 +16,6 @@ Tags written:
 - Topology complexity:
     "topology_unknown"
     "low topological complexity"
-    "medium topological complexity"
     "high topological complexity"
 
 - Lighting:
@@ -1022,15 +1021,9 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
     """
     Per-frame topology tagging:
 
-            - high:   ego is on a connector. Preserve the existing connector-neighborhood
-                                analysis as a stronger explanation signal, but entering the
-                                intersection is already enough to be high. Also allow
-                                an immediate upcoming connector in the BEV crop to count
-                                as high for frames right at the intersection entry.
-            - medium: ego is not yet on a connector, but a connector is either close
-                                ahead or simply visible inside the BEV crop.
-            - low:    no connector is close ahead and none are visible inside the
-                                BEV crop.
+            - high: any connector / intersection segment is present inside the
+                                ego-frame BEV crop.
+            - low:  only non-connector road segments are present inside the crop.
     """
     stats = _lane_segment_graph_stats(data, args)
 
@@ -1038,46 +1031,30 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
         return "topology_unknown", {
             "value": None,
             "confidence": 0.0,
-            "method": "ego_connector_neighborhood",
+            "method": "bev_connector_presence",
             "status": "no_lane_segments",
             "graph": stats,
         }
 
-    dist = stats["dist_to_nearest_connector_m"]
-    ego_choice_count = int(stats.get("ego_connector_choice_count", 0))
     connectors_in_bev = int(stats.get("num_connectors_in_bev", 0))
 
     if stats["ego_on_connector"]:
         tag = "high topological complexity"
-        score = 0.9
-        if (
-            ego_choice_count >= args.topo_high_choice_count
-            or connectors_in_bev >= args.topo_high_num_connectors
-        ):
-            decision = "complex_connector_neighborhood"
-        else:
-            decision = "ego_on_connector"
-    elif dist is not None and dist <= args.topo_high_dist_m:
-        tag = "high topological complexity"
-        score = 0.8
-        decision = "connector_immediate_ahead"
-    elif dist is not None and dist <= args.topo_medium_dist_m:
-        tag = "medium topological complexity"
-        score = 0.5
-        decision = "connector_ahead"
+        score = 1.0
+        decision = "ego_on_connector"
     elif connectors_in_bev > 0:
-        tag = "medium topological complexity"
-        score = 0.4
-        decision = "connector_visible_in_bev"
+        tag = "high topological complexity"
+        score = 1.0
+        decision = "connector_present_in_bev"
     else:
         tag = "low topological complexity"
-        score = 0.1
-        decision = "no_connector_nearby"
+        score = 0.0
+        decision = "no_connector_in_bev"
 
     meta = {
         "value": float(score),
         "confidence": 1.0 if stats["ego_segment_idx"] is not None else 0.3,
-        "method": "ego_connector_neighborhood",
+        "method": "bev_connector_presence",
         "status": "ok",
         "decision_source": decision,
         "graph": stats,
@@ -1088,11 +1065,7 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
                 "y_min": float(args.topo_bev_y_min),
                 "y_max": float(args.topo_bev_y_max),
             },
-            "high_dist_m": args.topo_high_dist_m,
-            "medium_dist_m": args.topo_medium_dist_m,
-            "high_choice_count": args.topo_high_choice_count,
-            "high_num_connectors": args.topo_high_num_connectors,
-            "bev_visible_connector_is_medium": True,
+            "high_if_any_connector_in_bev": True,
         },
     }
     return tag, meta
@@ -1829,8 +1802,11 @@ LEGACY_CURVATURE_TAGS = {
 TOPOLOGY_TAGS = {
     "topology_unknown",
     "low topological complexity",
-    "medium topological complexity",
     "high topological complexity",
+}
+
+LEGACY_TOPOLOGY_TAGS = {
+    "medium topological complexity",
 }
 
 LIGHTING_TAGS = {
@@ -2051,7 +2027,7 @@ def update_json_fields(
     tags = data["scenario_tags"]
     # Remove any leftover frame-level curvature tags from previous runs
     tags = [t for t in tags if t not in (CURVATURE_TAGS | LEGACY_CURVATURE_TAGS)]
-    tags = upsert_tag_family(tags, topo_tag, TOPOLOGY_TAGS)
+    tags = upsert_tag_family(tags, topo_tag, TOPOLOGY_TAGS | LEGACY_TOPOLOGY_TAGS)
     tags = upsert_tag_family(tags, lighting_tag, LIGHTING_TAGS)
     tags = upsert_tag_family(tags, occlusion_tag, OCCLUSION_TAGS)
     data["scenario_tags"] = tags
@@ -2154,7 +2130,6 @@ def process_file(
         topo_dist_str = f"{topo_dist:5.1f}m" if isinstance(topo_dist, (int, float)) else "  n/a"
         topo_short = {
             "high topological complexity": "HIGH",
-            "medium topological complexity": "MED ",
             "low topological complexity": "LOW ",
             "topology_unknown": "UNK ",
         }.get(topo_tag, "??? ")
@@ -2268,23 +2243,6 @@ def main():
                         help="Topology BEV crop min y (m) in ego frame.")
     parser.add_argument("--topo_bev_y_max", type=float, default=25.0,
                         help="Topology BEV crop max y (m) in ego frame.")
-    parser.add_argument("--topo_high_dist_m", type=float, default=8.0,
-                        help="If ego is not yet on a connector but the nearest connector "
-                            "inside the BEV crop is within this distance (m), tag the "
-                            "frame as high topological complexity.")
-    parser.add_argument("--topo_medium_dist_m", type=float, default=20.0,
-                        help="If ego is NOT currently on a connector segment but a connector "
-                             "exists within this forward distance (m), the frame is tagged "
-                            "'medium topological complexity'. Beyond this distance -> 'low'.")
-    parser.add_argument("--topo_high_choice_count", type=int, default=3,
-                        help="If ego is on a connector and at least this many related "
-                            "connector choices share its predecessor/successor neighborhood, "
-                            "tag the frame as high topological complexity.")
-    parser.add_argument("--topo_high_num_connectors", type=int, default=4,
-                        help="If ego is on a connector and the BEV crop contains at least "
-                            "this many connector segments, tag the frame as high topological "
-                            "complexity.")
-
     # lighting params
     parser.add_argument("--light_dark_thresh", type=float, default=0.16)
     parser.add_argument("--light_sat_low_thresh", type=float, default=0.04)
