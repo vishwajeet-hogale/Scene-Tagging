@@ -33,8 +33,8 @@ python add_scenario_tags.py \
   --topo_bev_y_max 25.0
 
 python plot_scenario_tags.py \
-  --target_root /scratch/hogale.v/OpenLaneV2/val/10101 \
+  --target_root /scratch/hogale.v/OpenLaneV2/val \
   --output_dir ./analysis/scenario_tag_analysis_new_val \
-  --examples_per_tag 5 \
+  --examples_per_tag 20 \
   --camera_name ring_front_center \
   --image_ext jpg
