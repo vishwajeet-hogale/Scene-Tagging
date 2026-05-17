@@ -20,7 +20,7 @@ import csv
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -408,7 +408,7 @@ def _scene_key_for_example(path: Path, target_root: Path) -> str:
 
 def _select_diverse_paths(
     paths: List[Path],
-    used_paths: set[Path],
+    used_paths: Set[Path],
     examples_per_tag: int,
     target_root: Path,
 ) -> List[Path]:
