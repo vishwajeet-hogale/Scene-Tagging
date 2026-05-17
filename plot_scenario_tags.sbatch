@@ -17,7 +17,7 @@ mkdir -p logs
 
 python plot_scenario_tags.py \
   --target_root /scratch/hogale.v/OpenLaneV2/val \
-  --output_dir ./analysis/scenario_tag_analysis_new_val \
+  --output_dir ./analysis/scenario_tag_analysis_presentation \
   --examples_per_tag 15 \
   --camera_name ring_front_center \
   --image_ext jpg
