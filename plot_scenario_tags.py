@@ -31,12 +31,14 @@ except ImportError:
 
 try:
     from add_scenario_tags import (
+        RING_CAMERA_LAYOUT,
         _get_lane_segments,
         get_camera_projection_params,
         project_lane_xyz_to_image_uv,
         resolve_image_path,
     )
 except Exception:
+    RING_CAMERA_LAYOUT = []
     _get_lane_segments = None
     get_camera_projection_params = None
     project_lane_xyz_to_image_uv = None
@@ -513,49 +515,32 @@ def _lane_overlay_color(
     return GT_DEFAULT_ROAD_BGR
 
 
-def render_tag_example_image(
+def _render_camera_example_panel(
     json_path: Path,
+    data: Dict[str, Any],
+    lane_segments: List[Dict[str, Any]],
+    lane_seg_meta: Dict[Any, Dict[str, Any]],
     family: str,
     tag: str,
-    output_path: Path,
-    camera_name: str,
+    cam_name: str,
+    cam_label: str,
     image_ext: str,
-) -> bool:
-    if (
-        cv2 is None
-        or resolve_image_path is None
-        or _get_lane_segments is None
-        or get_camera_projection_params is None
-        or project_lane_xyz_to_image_uv is None
-    ):
-        return False
-
+    focus_camera_name: str,
+    panel_size: Optional[Tuple[int, int]] = None,
+) -> Optional[np.ndarray]:
     try:
-        with json_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
+        image_path = resolve_image_path(json_path, data, camera_name=cam_name, ext=image_ext)
     except Exception:
-        return False
+        image_path = None
 
-    if not isinstance(data, dict):
-        return False
-
-    image_path = resolve_image_path(json_path, data, camera_name=camera_name, ext=image_ext)
-    if not image_path.exists():
-        return False
+    if image_path is None or not image_path.exists():
+        return None
 
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
-        return False
+        return None
 
-    lane_segments = _get_lane_segments(data)
-    lane_seg_meta_list = ((data.get("scenario_meta") or {}).get("lane_segments") or [])
-    lane_seg_meta = {
-        entry.get("id"): entry
-        for entry in lane_seg_meta_list
-        if isinstance(entry, dict) and entry.get("id") is not None
-    }
-
-    proj_params = get_camera_projection_params(data, camera_name)
+    proj_params = get_camera_projection_params(data, cam_name)
     if proj_params is not None:
         img_h, img_w = image.shape[:2]
         for seg in lane_segments:
@@ -585,10 +570,96 @@ def render_tag_example_image(
                 lineType=cv2.LINE_AA,
             )
 
+    if panel_size is not None:
+        image = cv2.resize(image, panel_size, interpolation=cv2.INTER_AREA)
+
+    label_h = 28
     overlay = image.copy()
-    header_h = 72
-    cv2.rectangle(overlay, (0, 0), (image.shape[1], header_h), (0, 0, 0), -1)
-    image = cv2.addWeighted(overlay, 0.45, image, 0.55, 0.0)
+    cv2.rectangle(overlay, (0, 0), (image.shape[1], label_h), (0, 0, 0), -1)
+    image = cv2.addWeighted(overlay, 0.38, image, 0.62, 0.0)
+
+    border_color = (255, 255, 255)
+    border_width = 2
+    if cam_name == focus_camera_name:
+        border_color = (50, 220, 255)
+        border_width = 4
+
+    cv2.putText(
+        image,
+        cam_label,
+        (10, 19),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.rectangle(
+        image,
+        (0, 0),
+        (image.shape[1] - 1, image.shape[0] - 1),
+        border_color,
+        border_width,
+    )
+    return image
+
+
+def render_tag_example_image(
+    json_path: Path,
+    family: str,
+    tag: str,
+    output_path: Path,
+    camera_name: str,
+    image_ext: str,
+) -> bool:
+    if (
+        cv2 is None
+        or resolve_image_path is None
+        or _get_lane_segments is None
+        or get_camera_projection_params is None
+        or project_lane_xyz_to_image_uv is None
+        or not RING_CAMERA_LAYOUT
+    ):
+        return False
+
+    try:
+        with json_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False
+
+    if not isinstance(data, dict):
+        return False
+
+    lane_segments = _get_lane_segments(data)
+    lane_seg_meta_list = ((data.get("scenario_meta") or {}).get("lane_segments") or [])
+    lane_seg_meta = {
+        entry.get("id"): entry
+        for entry in lane_seg_meta_list
+        if isinstance(entry, dict) and entry.get("id") is not None
+    }
+
+    panel_size = (640, 360)
+    rendered_panels: Dict[Tuple[int, int], np.ndarray] = {}
+    for row, col, cam_name, cam_label in RING_CAMERA_LAYOUT:
+        panel = _render_camera_example_panel(
+            json_path=json_path,
+            data=data,
+            lane_segments=lane_segments,
+            lane_seg_meta=lane_seg_meta,
+            family=family,
+            tag=tag,
+            cam_name=cam_name,
+            cam_label=cam_label,
+            image_ext=image_ext,
+            focus_camera_name=camera_name,
+            panel_size=panel_size,
+        )
+        if panel is not None:
+            rendered_panels[(row, col)] = panel
+
+    if not rendered_panels:
+        return False
 
     scenario_tags = sorted({
         normalize_tag(t)
@@ -596,14 +667,55 @@ def render_tag_example_image(
         if isinstance(t, str) and t.strip()
     })
     scenario_text = ", ".join(scenario_tags) if scenario_tags else "<none>"
+
+    panel_w, panel_h = panel_size
+    grid_rows = max(row for row, _, _, _ in RING_CAMERA_LAYOUT) + 1
+    grid_cols = max(col for _, col, _, _ in RING_CAMERA_LAYOUT) + 1
+    header_h = 88
+    gap = 12
+    canvas_h = header_h + grid_rows * panel_h + (grid_rows + 1) * gap
+    canvas_w = grid_cols * panel_w + (grid_cols + 1) * gap
+    image = np.full((canvas_h, canvas_w, 3), 18, dtype=np.uint8)
+
+    cv2.rectangle(image, (0, 0), (canvas_w, header_h), (30, 30, 30), -1)
+
+    for row, col, cam_name, cam_label in RING_CAMERA_LAYOUT:
+        x0 = gap + col * (panel_w + gap)
+        y0 = header_h + gap + row * (panel_h + gap)
+        panel = rendered_panels.get((row, col))
+        if panel is None:
+            panel = np.full((panel_h, panel_w, 3), 45, dtype=np.uint8)
+            cv2.putText(
+                panel,
+                cam_label,
+                (10, 19),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                panel,
+                "missing",
+                (panel_w // 2 - 55, panel_h // 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (180, 180, 180),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.rectangle(panel, (0, 0), (panel_w - 1, panel_h - 1), (120, 120, 120), 2)
+        image[y0:y0 + panel_h, x0:x0 + panel_w] = panel
+
     line1 = f"{family.upper()} | {tag}"
-    line2 = f"frame={json_path.stem} | camera={camera_name}"
+    line2 = f"frame={json_path.stem} | cameras=all | highlight={camera_name}"
     line3 = f"scenario_tags: {scenario_text}"
-    cv2.putText(image, line1, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+    cv2.putText(image, line1, (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.78,
                 (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(image, line2, (12, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.50,
+    cv2.putText(image, line2, (16, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.56,
                 (230, 230, 230), 1, cv2.LINE_AA)
-    cv2.putText(image, line3[:120], (12, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+    cv2.putText(image, line3[:180], (16, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.48,
                 (220, 220, 220), 1, cv2.LINE_AA)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1310,7 +1422,7 @@ def main() -> None:
     parser.add_argument("--examples_per_tag", type=int, default=5,
                         help="Maximum number of exemplar images to export per tag.")
     parser.add_argument("--camera_name", type=str, default="ring_front_center",
-                        help="Camera used for exemplar image export.")
+                        help="Camera to highlight in multi-camera exemplar image export.")
     parser.add_argument("--image_ext", type=str, default="jpg",
                         help="Image extension used when resolving exemplar image paths.")
     args = parser.parse_args()
