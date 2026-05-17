@@ -394,9 +394,79 @@ def collect_example_candidates(files: List[Path]) -> Dict[str, Dict[str, List[Pa
     return deduped
 
 
+def _scene_key_for_example(path: Path, target_root: Path) -> str:
+    try:
+        rel_path = path.relative_to(target_root)
+    except ValueError:
+        rel_path = path
+
+    if target_root.name.lower() in {"train", "val", "test"} and len(rel_path.parts) >= 2:
+        return rel_path.parts[0]
+
+    return target_root.name or path.parent.name or "."
+
+
+def _select_diverse_paths(
+    paths: List[Path],
+    used_paths: set[Path],
+    examples_per_tag: int,
+    target_root: Path,
+) -> List[Path]:
+    scene_buckets: Dict[str, List[Path]] = {}
+    scene_order: List[str] = []
+
+    for path in paths:
+        scene_key = _scene_key_for_example(path, target_root)
+        if scene_key not in scene_buckets:
+            scene_buckets[scene_key] = []
+            scene_order.append(scene_key)
+        scene_buckets[scene_key].append(path)
+
+    chosen: List[Path] = []
+    bucket_indices = {scene_key: 0 for scene_key in scene_order}
+    active_scenes = list(scene_order)
+
+    while active_scenes and len(chosen) < examples_per_tag:
+        next_active_scenes: List[str] = []
+        for scene_key in active_scenes:
+            scene_paths = scene_buckets[scene_key]
+            idx = bucket_indices[scene_key]
+            while idx < len(scene_paths) and (
+                scene_paths[idx] in used_paths or scene_paths[idx] in chosen
+            ):
+                idx += 1
+
+            if idx >= len(scene_paths):
+                bucket_indices[scene_key] = idx
+                continue
+
+            chosen.append(scene_paths[idx])
+            idx += 1
+            bucket_indices[scene_key] = idx
+
+            if idx < len(scene_paths):
+                next_active_scenes.append(scene_key)
+
+            if len(chosen) >= examples_per_tag:
+                break
+
+        active_scenes = next_active_scenes
+
+    if len(chosen) < examples_per_tag:
+        for path in paths:
+            if path in used_paths or path in chosen:
+                continue
+            chosen.append(path)
+            if len(chosen) >= examples_per_tag:
+                break
+
+    return chosen
+
+
 def select_example_paths(
     candidates: Dict[str, Dict[str, List[Path]]],
     examples_per_tag: int,
+    target_root: Path,
 ) -> Dict[str, Dict[str, List[Path]]]:
     selected: Dict[str, Dict[str, List[Path]]] = {}
 
@@ -412,20 +482,12 @@ def select_example_paths(
 
         for tag in ordered_tags:
             paths = tag_candidates.get(tag, [])
-            chosen: List[Path] = []
-            for path in paths:
-                if path in used_paths:
-                    continue
-                chosen.append(path)
-                if len(chosen) >= examples_per_tag:
-                    break
-            if len(chosen) < examples_per_tag:
-                for path in paths:
-                    if path in chosen:
-                        continue
-                    chosen.append(path)
-                    if len(chosen) >= examples_per_tag:
-                        break
+            chosen = _select_diverse_paths(
+                paths=paths,
+                used_paths=used_paths,
+                examples_per_tag=examples_per_tag,
+                target_root=target_root,
+            )
             if chosen:
                 selected[family][tag] = chosen
                 used_paths.update(chosen)
@@ -550,6 +612,7 @@ def render_tag_example_image(
 
 def export_tag_example_images(
     files: List[Path],
+    target_root: Path,
     output_dir: Path,
     examples_per_tag: int,
     camera_name: str,
@@ -560,7 +623,11 @@ def export_tag_example_images(
         return
 
     candidates = collect_example_candidates(files)
-    selections = select_example_paths(candidates, examples_per_tag=examples_per_tag)
+    selections = select_example_paths(
+        candidates,
+        examples_per_tag=examples_per_tag,
+        target_root=target_root,
+    )
 
     examples_root = output_dir / "examples"
     wrote = 0
@@ -1280,6 +1347,7 @@ def main() -> None:
     if not args.skip_examples:
         export_tag_example_images(
             files,
+            target_root=root,
             output_dir=output_dir,
             examples_per_tag=args.examples_per_tag,
             camera_name=args.camera_name,
