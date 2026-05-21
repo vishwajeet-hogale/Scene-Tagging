@@ -1092,10 +1092,10 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
     merges_in_bev     = int(stats.get("num_merges_in_bev", 0))
     has_branching     = (splits_in_bev + merges_in_bev) > 0
 
-    if stats["ego_on_connector"] or connectors_in_bev > 0:
+    if connectors_in_bev > 0:
         tag      = "high topological complexity"
         score    = 1.0
-        decision = "ego_on_connector" if stats["ego_on_connector"] else "connector_present_in_bev"
+        decision = "connector_present_in_bev"
     elif has_branching:
         tag      = "medium topological complexity"
         score    = 0.5
