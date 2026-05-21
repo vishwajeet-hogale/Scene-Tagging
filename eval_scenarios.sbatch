@@ -22,6 +22,6 @@ cd /home/hogale.v/Lane_Topology/OLV2_Scenario_Tag_Gen
 
 python ./tools/data_process.py
 
-python tools/eval_per_scenario.py projects/configs/lanesegnet_r50_8x1_24e_olv2_subset_A.py results/results.pkl --out-dir results/scenario_eval_new_curv_lane_greedy --meta-pkl /scratch/hogale.v/OpenLaneV2/data_dict_subset_A_val_lanesegnet.pkl
+python tools/eval_per_scenario.py projects/configs/lanesegnet_r50_8x1_24e_olv2_subset_A.py results/results.pkl --out-dir results/scenario_eval_new_curv_lane_greedy_for_presentation --meta-pkl /scratch/hogale.v/OpenLaneV2/data_dict_subset_A_val_lanesegnet.pkl
 
-python tools/eval_per_scenario_hungarian.py projects/configs/lanesegnet_r50_8x1_24e_olv2_subset_A.py results/results.pkl --out-dir results/scenario_eval_hungarian_all --meta-pkl /scratch/hogale.v/OpenLaneV2/data_dict_subset_A_val_lanesegnet.pkl
+# python tools/eval_per_scenario_hungarian.py projects/configs/lanesegnet_r50_8x1_24e_olv2_subset_A.py results/results.pkl --out-dir results/scenario_eval_hungarian_all --meta-pkl /scratch/hogale.v/OpenLaneV2/data_dict_subset_A_val_lanesegnet.pkl
