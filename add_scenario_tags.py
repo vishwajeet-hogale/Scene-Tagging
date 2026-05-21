@@ -940,6 +940,8 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
         "ego_connector_related_connectors": 0,
         "ego_connector_pred_fanout_max": 0,
         "ego_connector_succ_fanin_max": 0,
+        "num_splits_in_bev": 0,
+        "num_merges_in_bev": 0,
     }
 
     if len(segments) == 0:
@@ -994,6 +996,36 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
     base["num_segments_in_bev"] = n_seg_in_bev
     base["num_connectors_in_bev"] = n_conn_in_bev
 
+    # ------------------------------------------------------------------
+    # Split / merge detection within the BEV crop.
+    # A split: a non-connector segment in the BEV crop has >1 successor
+    #   that also has points in the BEV crop.
+    # A merge: a non-connector segment in the BEV crop has >1 predecessor
+    #   that also has points in the BEV crop.
+    # We only look at non-connector segments because connectors already
+    # signal "high" complexity by themselves.
+    # ------------------------------------------------------------------
+    num_splits_in_bev = 0
+    num_merges_in_bev = 0
+    if lsls_bin is not None:
+        for idx in range(n):
+            if not in_bev_mask[idx] or connector_flags[idx]:
+                continue
+            successors_in_bev = [
+                j for j in np.where(lsls_bin[idx] > 0)[0]
+                if in_bev_mask[j]
+            ]
+            predecessors_in_bev = [
+                j for j in np.where(lsls_bin[:, idx] > 0)[0]
+                if in_bev_mask[j]
+            ]
+            if len(successors_in_bev) > 1:
+                num_splits_in_bev += 1
+            if len(predecessors_in_bev) > 1:
+                num_merges_in_bev += 1
+    base["num_splits_in_bev"] = num_splits_in_bev
+    base["num_merges_in_bev"] = num_merges_in_bev
+
     if ego_idx is not None and base["ego_on_connector"] and lsls_bin is not None and in_bev_mask[ego_idx]:
         pred_fanout_max = 0
         succ_fanin_max = 0
@@ -1034,11 +1066,15 @@ def _lane_segment_graph_stats(data: Dict[str, Any], args: argparse.Namespace) ->
 
 def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) -> Tuple[str, Dict[str, Any]]:
     """
-    Per-frame topology tagging:
+    Per-frame topology tagging (3 tiers, evaluated within the ego BEV crop):
 
-            - high: any connector / intersection segment is present inside the
-                                ego-frame BEV crop.
-            - low:  only non-connector road segments are present inside the crop.
+    - high:   any is_intersection_or_connector segment is present in the BEV crop
+              (intersection / turning lane).  A mix of intersection + split/merge
+              also falls here.
+    - medium: no connectors in the crop, but at least one non-connector segment
+              has a split (fanout>1) or merge (fanin>1) with another BEV-crop
+              segment — i.e. road branches or lanes join within the crop.
+    - low:    only straight-through segments with no branching in the BEV crop.
     """
     stats = _lane_segment_graph_stats(data, args)
 
@@ -1046,30 +1082,33 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
         return "topology_unknown", {
             "value": None,
             "confidence": 0.0,
-            "method": "bev_connector_presence",
+            "method": "bev_topology_3tier",
             "status": "no_lane_segments",
             "graph": stats,
         }
 
     connectors_in_bev = int(stats.get("num_connectors_in_bev", 0))
+    splits_in_bev     = int(stats.get("num_splits_in_bev", 0))
+    merges_in_bev     = int(stats.get("num_merges_in_bev", 0))
+    has_branching     = (splits_in_bev + merges_in_bev) > 0
 
-    if stats["ego_on_connector"]:
-        tag = "high topological complexity"
-        score = 1.0
-        decision = "ego_on_connector"
-    elif connectors_in_bev > 0:
-        tag = "high topological complexity"
-        score = 1.0
-        decision = "connector_present_in_bev"
+    if stats["ego_on_connector"] or connectors_in_bev > 0:
+        tag      = "high topological complexity"
+        score    = 1.0
+        decision = "ego_on_connector" if stats["ego_on_connector"] else "connector_present_in_bev"
+    elif has_branching:
+        tag      = "medium topological complexity"
+        score    = 0.5
+        decision = "split_or_merge_in_bev"
     else:
-        tag = "low topological complexity"
-        score = 0.0
-        decision = "no_connector_in_bev"
+        tag      = "low topological complexity"
+        score    = 0.0
+        decision = "no_connector_no_branching_in_bev"
 
     meta = {
         "value": float(score),
         "confidence": 1.0 if stats["ego_segment_idx"] is not None else 0.3,
-        "method": "bev_connector_presence",
+        "method": "bev_topology_3tier",
         "status": "ok",
         "decision_source": decision,
         "graph": stats,
@@ -1080,7 +1119,8 @@ def compute_topology_complexity(data: Dict[str, Any], args: argparse.Namespace) 
                 "y_min": float(args.topo_bev_y_min),
                 "y_max": float(args.topo_bev_y_max),
             },
-            "high_if_any_connector_in_bev": True,
+            "high_if_connector_in_bev": True,
+            "medium_if_split_or_merge_in_bev": True,
         },
     }
     return tag, meta
@@ -1855,12 +1895,11 @@ LEGACY_CURVATURE_TAGS = {
 TOPOLOGY_TAGS = {
     "topology_unknown",
     "low topological complexity",
+    "medium topological complexity",
     "high topological complexity",
 }
 
-LEGACY_TOPOLOGY_TAGS = {
-    "medium topological complexity",
-}
+LEGACY_TOPOLOGY_TAGS: set = set()
 
 LIGHTING_TAGS = {
     "well lit",
