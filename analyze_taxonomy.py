@@ -63,6 +63,7 @@ except Exception:
 FRAME_TAG_FAMILIES = {
     "topology": [
         "low topological complexity",
+        "medium topological complexity",
         "high topological complexity",
         "topology_unknown",
     ],
@@ -180,9 +181,10 @@ def extract_frame_row(path: Path, data: Dict[str, Any]) -> Optional[Dict[str, An
         "topology_score": topo.get("value"),
         "topology_method": topo.get("method"),
         "num_lane_segments": graph_stats.get("num_segments"),
-        "num_connectors_in_radius": graph_stats.get("num_connectors_in_radius"),
+        "num_connectors_in_bev": graph_stats.get("num_connectors_in_bev"),
+        "num_splits_in_bev": graph_stats.get("num_splits_in_bev"),
+        "num_merges_in_bev": graph_stats.get("num_merges_in_bev"),
         "dist_to_nearest_connector_m": graph_stats.get("dist_to_nearest_connector_m"),
-        "ego_on_connector": graph_stats.get("ego_on_connector"),
         "ego_segment_idx": graph_stats.get("ego_segment_idx"),
 
         # Lighting
@@ -330,6 +332,7 @@ TAG_COLORS = {
     "curvature_unknown": "#888888",
     # topology
     "low topological complexity": "#9ecae1",
+    "medium topological complexity": "#4292c6",
     "high topological complexity": "#08519c",
     "topology_unknown": "#888888",
     # lighting

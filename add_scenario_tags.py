@@ -1720,7 +1720,11 @@ def render_occlusion_debug_frame(
     cv2.putText(header, occ_text, (10, 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, occ_color, 2, cv2.LINE_AA)
     if topo_tag is not None:
-        topo_color = (0, 80, 255) if topo_tag == "high topological complexity" else (0, 200, 100)
+        topo_color = (
+            (0, 80, 255) if topo_tag == "high topological complexity"
+            else (0, 165, 255) if topo_tag == "medium topological complexity"
+            else (0, 200, 100)
+        )
         cv2.putText(header, f"TOPO: {topo_tag.upper()}", (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, topo_color, 2, cv2.LINE_AA)
     composite = np.vstack([header, grid])
