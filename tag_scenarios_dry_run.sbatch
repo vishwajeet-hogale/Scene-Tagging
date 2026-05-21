@@ -22,7 +22,7 @@ python add_scenario_tags.py \
   --dataset_root /scratch/hogale.v/OpenLaneV2/val/10092 \
   --debug_viz_n 30 \
   --debug_viz_dir ./debug_viz_new \
-  --topo_bev_x_min -50.0 \
-  --topo_bev_x_max 50.0 \
+  --topo_bev_x_min -25.0 \
+  --topo_bev_x_max 25.0 \
   --topo_bev_y_min -25.0 \
   --topo_bev_y_max 25.0
