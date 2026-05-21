@@ -826,6 +826,21 @@ def _segment_centerline_xy(segment: Dict[str, Any]) -> np.ndarray:
     return polyline_to_xy(centerline)
 
 
+def _segment_centerline_xyz(segment: Dict[str, Any]) -> np.ndarray:
+    """Return Nx3 array of centerline points. Uses the stored z if available,
+    otherwise falls back to z=0 (flat-ground assumption)."""
+    centerline = segment.get("centerline")
+    if not is_polyline_like(centerline):
+        return np.zeros((0, 3), dtype=np.float64)
+    arr = np.array(centerline, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] < 2 or arr.shape[1] < 2:
+        return np.zeros((0, 3), dtype=np.float64)
+    if arr.shape[1] >= 3:
+        return arr[:, :3]
+    # Only x,y available — pad with z=0
+    return np.column_stack([arr[:, :2], np.zeros(len(arr), dtype=np.float64)])
+
+
 def _segment_points_in_bev_box(
     segment: Dict[str, Any],
     x_min: float,
@@ -1264,6 +1279,9 @@ def collect_lane_arrays(data: Dict[str, Any]) -> List[np.ndarray]:
     return lanes
 
 
+MAX_LANE_RANGE_M = 50.0  # Drop lane points farther than this from ego origin
+
+
 def project_lane_xyz_to_image_uv(
     lane_xyz: np.ndarray,
     K: np.ndarray,
@@ -1275,12 +1293,20 @@ def project_lane_xyz_to_image_uv(
         return np.zeros((0, 2), dtype=np.float64)
 
     xyz = lane_xyz[:, :3].astype(np.float64)
+
+    # Discard points beyond MAX_LANE_RANGE_M from ego (origin in ego frame).
+    # Distant points project near the vanishing point / horizon and produce
+    # misleading near-horizontal lines that appear to float in the air.
+    ego_dist = np.linalg.norm(xyz, axis=1)
+    xyz = xyz.copy()
+    xyz[ego_dist > MAX_LANE_RANGE_M] = np.nan
+
     cam = (R.T @ (xyz - t.reshape(1, 3)).T).T
 
     x_c, y_c, z_c = cam[:, 0], cam[:, 1], cam[:, 2]
     uv = np.full((xyz.shape[0], 2), np.nan, dtype=np.float64)
 
-    valid = z_c > 1e-6
+    valid = (z_c > 1e-6) & np.isfinite(x_c) & np.isfinite(y_c)
     if not np.any(valid):
         return uv
 
@@ -1526,9 +1552,9 @@ def render_occlusion_debug_frame(
         return False
 
     lanes_3d = [
-        np.column_stack([_segment_centerline_xy(seg), np.zeros(len(_segment_centerline_xy(seg)))])
+        _segment_centerline_xyz(seg)
         for seg in _get_lane_segments(data)
-        if len(_segment_centerline_xy(seg)) >= 2
+        if len(_segment_centerline_xyz(seg)) >= 2
     ]
 
     LAYOUT = [
@@ -1687,9 +1713,9 @@ def compute_occlusion_for_frame(
         }
 
     lanes_3d = [
-        np.column_stack([_segment_centerline_xy(seg), np.zeros(len(_segment_centerline_xy(seg)))])
+        _segment_centerline_xyz(seg)
         for seg in _get_lane_segments(data)
-        if len(_segment_centerline_xy(seg)) >= 2
+        if len(_segment_centerline_xyz(seg)) >= 2
     ]
 
     total_samples_sum = 0
