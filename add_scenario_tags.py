@@ -1228,7 +1228,7 @@ def _build_fixed_calib() -> None:
         cam_z = np.array([cy,  sy,  0.0])
         cam_x = np.array([sy, -cy,  0.0])
         cam_y = np.array([0.0, 0.0, -1.0])
-        R = np.stack([cam_x, cam_y, cam_z], axis=0)
+        R = np.stack([cam_x, cam_y, cam_z], axis=1)
 
         if name == "ring_front_center":
             R = np.array([
@@ -1316,7 +1316,12 @@ def get_camera_projection_params(
         t = np.array(extrinsic.get("translation", []), dtype=np.float64).reshape(-1)
 
         if K.shape == (3, 3) and R.shape == (3, 3) and t.shape == (3,) and distortion.size >= 3:
-            return K, distortion[:3], R, t
+            # OpenCV distortion layout: [k1, k2, p1, p2, k3, ...]
+            # Taking [:3] would grab p1 (tangential) as k3. Extract by index.
+            k1 = distortion[0]
+            k2 = distortion[1]
+            k3 = distortion[4] if distortion.size >= 5 else 0.0
+            return K, np.array([k1, k2, k3], dtype=np.float64), R, t
 
     if camera_name in FIXED_CALIB:
         return FIXED_CALIB[camera_name]
@@ -1329,8 +1334,12 @@ def project_3d_lanes_to_image(
     img_w: int,
     img_h: int,
     projection_params: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-) -> List[np.ndarray]:
-    out = []
+) -> List[List[np.ndarray]]:
+    """Returns a list of groups. Each group is a list of contiguous in-image
+    segments that all came from the same original 3-D lane. Callers that need
+    to filter by total visible length should sum across the group; callers that
+    only need a flat list of polylines can flatten with a list comprehension."""
+    out: List[List[np.ndarray]] = []
     for lane in lanes_3d:
         if lane.ndim != 2 or lane.shape[0] < 2 or lane.shape[1] < 3:
             continue
@@ -1340,9 +1349,15 @@ def project_3d_lanes_to_image(
             (uv[:, 0] >= 0) & (uv[:, 0] < img_w) &
             (uv[:, 1] >= 0) & (uv[:, 1] < img_h)
         )
-        pts = uv[mask]
-        if pts.shape[0] >= 2:
-            out.append(pts)
+        # Split on gaps so we never interpolate across image boundaries.
+        kept_indices = np.where(mask)[0]
+        if len(kept_indices) < 2:
+            continue
+        breaks = np.where(np.diff(kept_indices) > 1)[0] + 1
+        group = [uv[seg_idx] for seg_idx in np.split(kept_indices, breaks)
+                 if len(seg_idx) >= 2]
+        if group:
+            out.append(group)
     return out
 
 
@@ -1428,13 +1443,17 @@ def point_in_any_box(u: float, v: float, boxes: List[Tuple[float, float, float, 
 
 
 def compute_occlusion(
-    lane_polys_img: List[np.ndarray],
+    lane_polys_img: List[List[np.ndarray]],
     boxes: List[Tuple[float, float, float, float, float, int]],
     image_w: int,
     image_h: int,
     sample_ds_px: float,
     min_lane_length_px: float,
 ) -> Dict[str, Any]:
+    """lane_polys_img is a list of groups (one per original 3-D lane). Each
+    group is a list of contiguous in-image segments as returned by
+    project_3d_lanes_to_image. The min_lane_length_px filter is applied to the
+    *total* visible length of the group, not each split segment individually."""
     candidate_lanes = len(lane_polys_img)
     in_frame_lanes = 0
     short_lanes = 0
@@ -1443,34 +1462,31 @@ def compute_occlusion(
     lanes_used = 0
     visible_lengths_px: List[float] = []
 
-    for xy in lane_polys_img:
-        if len(xy) < 2:
-            continue
-        mask = (
-            np.isfinite(xy[:, 0]) & np.isfinite(xy[:, 1]) &
-            (xy[:, 0] >= 0) & (xy[:, 0] < image_w) &
-            (xy[:, 1] >= 0) & (xy[:, 1] < image_h)
+    for seg_group in lane_polys_img:
+        # Sum visible length across all contiguous segments of this lane.
+        group_len = sum(
+            float(np.sum(np.linalg.norm(np.diff(s, axis=0), axis=1)))
+            for s in seg_group if len(s) >= 2
         )
-        pts = xy[mask]
-        if len(pts) < 2:
+        if group_len == 0.0:
             continue
         in_frame_lanes += 1
-
-        vis_len = float(np.sum(np.linalg.norm(np.diff(pts, axis=0), axis=1)))
-        visible_lengths_px.append(vis_len)
-        if vis_len < min_lane_length_px:
+        visible_lengths_px.append(group_len)
+        if group_len < min_lane_length_px:
             short_lanes += 1
             continue
 
-        samples = resample_polyline_px(pts, ds_px=sample_ds_px)
-        if len(samples) == 0:
-            continue
-
         lanes_used += 1
-        total_samples += len(samples)
-        for u, v in samples:
-            if point_in_any_box(float(u), float(v), boxes):
-                occ_samples += 1
+        for pts in seg_group:
+            if len(pts) < 2:
+                continue
+            samples = resample_polyline_px(pts, ds_px=sample_ds_px)
+            if len(samples) == 0:
+                continue
+            total_samples += len(samples)
+            for u, v in samples:
+                if point_in_any_box(float(u), float(v), boxes):
+                    occ_samples += 1
 
     ratio = None if total_samples == 0 else float(occ_samples / total_samples)
     return {
@@ -1501,7 +1517,11 @@ def render_occlusion_debug_frame(
     args: argparse.Namespace,
     model: Any,
     out_path: Path,
+    viz_cache: Optional[Dict[str, Any]] = None,
 ) -> bool:
+    """viz_cache: optional dict of {cam_name: {"boxes": ..., "lane_polys_img": ...}}
+    populated by compute_occlusion_for_frame. When provided, YOLO inference and
+    lane projection are skipped, ensuring the visualization matches the stored tag."""
     if cv2 is None:
         return False
 
@@ -1541,20 +1561,27 @@ def render_occlusion_debug_frame(
         h, w = img.shape[:2]
         canvas = img.copy()
 
-        proj_params = get_camera_projection_params(data, cam_name)
-        lane_polys_img: List[np.ndarray] = []
-        if proj_params is not None:
-            lane_polys_img = project_3d_lanes_to_image(lanes_3d, w, h, proj_params)
+        if viz_cache is not None and cam_name in viz_cache:
+            cam_cache = viz_cache[cam_name]
+            lane_groups: List[List[np.ndarray]] = cam_cache["lane_polys_img"]
+            boxes: List[Tuple[float, float, float, float, float, int]] = cam_cache["boxes"]
+        else:
+            proj_params = get_camera_projection_params(data, cam_name)
+            lane_groups = []
+            if proj_params is not None:
+                lane_groups = project_3d_lanes_to_image(lanes_3d, w, h, proj_params)
+            boxes = []
+            if model is not None:
+                boxes = detect_vehicle_boxes(
+                    model=model, image_bgr=img,
+                    conf_thr=args.bbox_score_thr,
+                    imgsz=args.det_imgsz,
+                    device=args.device,
+                )
+                boxes = dilate_boxes(boxes, args.bbox_dilate_px, w, h)
 
-        boxes: List[Tuple[float, float, float, float, float, int]] = []
-        if model is not None:
-            boxes = detect_vehicle_boxes(
-                model=model, image_bgr=img,
-                conf_thr=args.bbox_score_thr,
-                imgsz=args.det_imgsz,
-                device=args.device,
-            )
-            boxes = dilate_boxes(boxes, args.bbox_dilate_px, w, h)
+        # Flatten groups to a plain list of polylines for drawing.
+        lane_polys_flat = [s for group in lane_groups for s in group]
 
         for x1, y1, x2, y2, score, cls_id in boxes:
             cv2.rectangle(canvas, (int(x1), int(y1)), (int(x2), int(y2)), _COLOR_BOX, 2)
@@ -1564,11 +1591,8 @@ def render_occlusion_debug_frame(
 
         cam_total = 0
         cam_occ = 0
-        for poly in lane_polys_img:
+        for poly in lane_polys_flat:
             if len(poly) < 2:
-                continue
-            vis_len = float(np.sum(np.linalg.norm(np.diff(poly, axis=0), axis=1)))
-            if vis_len < args.min_lane_length_px:
                 continue
             samples = resample_polyline_px(poly, ds_px=args.sample_ds_px)
             for u, v in samples:
@@ -1648,6 +1672,7 @@ def compute_occlusion_for_frame(
     jpath: Path,
     args: argparse.Namespace,
     model: Any,
+    build_viz_cache: bool = False,
 ) -> Tuple[str, Dict[str, Any]]:
     base_meta = {
         "value": None,
@@ -1681,6 +1706,7 @@ def compute_occlusion_for_frame(
     occ_samples_sum = 0
     total_boxes = 0
     per_camera: List[Dict[str, Any]] = []
+    viz_cache: Dict[str, Any] = {}
 
     for cam_name in RING_CAMERA_NAMES:
         cam_entry: Dict[str, Any] = {"camera": cam_name}
@@ -1711,8 +1737,8 @@ def compute_occlusion_for_frame(
             per_camera.append(cam_entry)
             continue
 
-        lane_polys_img = project_3d_lanes_to_image(lanes_3d, w, h, proj_params)
-        if not lane_polys_img:
+        lane_groups = project_3d_lanes_to_image(lanes_3d, w, h, proj_params)
+        if not lane_groups:
             cam_entry["status"] = "no_lanes_in_view"
             cam_entry["projected_lanes"] = 0
             per_camera.append(cam_entry)
@@ -1724,8 +1750,11 @@ def compute_occlusion_for_frame(
         )
         boxes = dilate_boxes(boxes, args.bbox_dilate_px, w, h)
 
+        if build_viz_cache:
+            viz_cache[cam_name] = {"boxes": boxes, "lane_polys_img": lane_groups}
+
         occ_stats = compute_occlusion(
-            lane_polys_img=lane_polys_img, boxes=boxes,
+            lane_polys_img=lane_groups, boxes=boxes,
             image_w=w, image_h=h,
             sample_ds_px=args.sample_ds_px,
             min_lane_length_px=args.min_lane_length_px,
@@ -1733,7 +1762,7 @@ def compute_occlusion_for_frame(
 
         cam_entry.update({
             "status": "ok",
-            "projected_lanes": len(lane_polys_img),
+            "projected_lanes": len(lane_groups),
             "lanes_used": occ_stats["lanes_used"],
             "total_samples": occ_stats["total_samples"],
             "occluded_samples": occ_stats["occluded_samples"],
@@ -1772,6 +1801,7 @@ def compute_occlusion_for_frame(
         "total_vehicle_boxes": total_boxes,
         "num_3d_lanes": len(lanes_3d),
         "per_camera": per_camera,
+        "_viz_cache": viz_cache if build_viz_cache else None,
     }
     return tag, meta
 
@@ -2081,7 +2111,10 @@ def process_file(
 
         img_path = resolve_image_path(jpath, topology_data, camera_name=args.camera_name, ext=args.image_ext)
         light_tag, light_meta = compute_lighting(img_path, args)
-        occ_tag, occ_meta = compute_occlusion_for_frame(topology_data, jpath, args, detector_model)
+        occ_tag, occ_meta = compute_occlusion_for_frame(
+            topology_data, jpath, args, detector_model,
+            build_viz_cache=debug_viz_dir is not None,
+        )
 
         per_segment: List[Dict[str, Any]] = []
         if _get_lane_segments(topology_data):
@@ -2102,6 +2135,7 @@ def process_file(
                 args=args,
                 model=detector_model,
                 out_path=occ_viz_path,
+                viz_cache=occ_meta.get("_viz_cache"),
             )
             if not success:
                 print(f"[WARN] Occlusion debug viz failed for {jpath.stem}")
@@ -2212,7 +2246,7 @@ def main():
                              "occlusion debug images (YOLO boxes + lane sample points) "
                              "to --debug_viz_dir. Useful to validate the pipeline before "
                              "a full run. Implies --dry_run.")
-    parser.add_argument("--debug_viz_dir", type=str, default="./debug_viz",
+    parser.add_argument("--debug_viz_dir", type=str, default="./debug_viz_occlusion",
                         help="Output directory for occlusion debug images when "
                              "--debug_viz_n is set.")
 
@@ -2264,7 +2298,7 @@ def main():
     parser.add_argument("--min_total_samples", type=int, default=40,
                         help="Min pooled lane samples across all cameras to produce a tag. "
                              "Below this, defaults to 'low occlusion'.")
-    parser.add_argument("--occlusion_ratio_threshold", type=float, default=0.75,
+    parser.add_argument("--occlusion_ratio_threshold", type=float, default=0.90,
                         help="Fraction of lane samples occluded (across all cameras) at or "
                              "above which the frame is tagged 'high occlusion'.")
 

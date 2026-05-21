@@ -20,7 +20,8 @@ mkdir -p logs
 
 python add_scenario_tags.py \
   --dataset_root /scratch/hogale.v/OpenLaneV2/val/10093 \
-  --dry_run \
+  --debug_viz_n 10 \
+  --debug_viz_dir ./debug_viz_occlusion \
   --topo_bev_x_min -50.0 \
   --topo_bev_x_max 50.0 \
   --topo_bev_y_min -25.0 \
