@@ -1525,16 +1525,11 @@ def render_occlusion_debug_frame(
     if cv2 is None:
         return False
 
-    raw_lanes = dedupe_polylines(collect_lane_arrays(data), tol=0.5)
-    lanes_3d = [lane[:, :3] for lane in raw_lanes
-                if lane.ndim == 2 and lane.shape[1] >= 3 and lane.shape[0] >= 2]
-    if not lanes_3d:
-        segments = _get_lane_segments(data)
-        for seg in segments:
-            xy = _segment_centerline_xy(seg)
-            if len(xy) >= 2:
-                xyz = np.column_stack([xy, np.zeros(len(xy))])
-                lanes_3d.append(xyz)
+    lanes_3d = [
+        np.column_stack([_segment_centerline_xy(seg), np.zeros(len(_segment_centerline_xy(seg)))])
+        for seg in _get_lane_segments(data)
+        if len(_segment_centerline_xy(seg)) >= 2
+    ]
 
     LAYOUT = [
         ("ring_front_left",  "ring_front_center",  "ring_front_right"),
@@ -1691,16 +1686,11 @@ def compute_occlusion_for_frame(
             "detector_model": args.det_model,
         }
 
-    raw_lanes = dedupe_polylines(collect_lane_arrays(data), tol=0.5)
-    lanes_3d = [lane[:, :3] for lane in raw_lanes
-                if lane.ndim == 2 and lane.shape[1] >= 3 and lane.shape[0] >= 2]
-    if not lanes_3d:
-        segments = _get_lane_segments(data)
-        for seg in segments:
-            xy = _segment_centerline_xy(seg)
-            if len(xy) >= 2:
-                xyz = np.column_stack([xy, np.zeros(len(xy))])
-                lanes_3d.append(xyz)
+    lanes_3d = [
+        np.column_stack([_segment_centerline_xy(seg), np.zeros(len(_segment_centerline_xy(seg)))])
+        for seg in _get_lane_segments(data)
+        if len(_segment_centerline_xy(seg)) >= 2
+    ]
 
     total_samples_sum = 0
     occ_samples_sum = 0
