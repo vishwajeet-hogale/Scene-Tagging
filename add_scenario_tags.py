@@ -1546,6 +1546,7 @@ def render_occlusion_debug_frame(
     model: Any,
     out_path: Path,
     viz_cache: Optional[Dict[str, Any]] = None,
+    topo_tag: Optional[str] = None,
 ) -> bool:
     """viz_cache: optional dict of {cam_name: {"boxes": ..., "lane_polys_img": ...}}
     populated by compute_occlusion_for_frame. When provided, YOLO inference and
@@ -1668,16 +1669,20 @@ def render_occlusion_debug_frame(
             x0, x1 = c * cell_w, (c + 1) * cell_w
             grid[y0:y1, x0:x1] = cell
 
-    header_h = 40
+    header_h = 60
     header = np.zeros((header_h, grid.shape[1], 3), dtype=np.uint8)
     ratio_str = f"{occ_ratio:.1%}" if isinstance(occ_ratio, (int, float)) else "n/a"
-    tag_color = (0, 0, 220) if occ_tag == "high occlusion" else (0, 180, 0)
-    header_text = (
-        f"{occ_tag.upper()}  |  ratio={ratio_str}  |  "
+    occ_color = (0, 0, 220) if occ_tag == "high occlusion" else (0, 180, 0)
+    occ_text = (
+        f"OCC: {occ_tag.upper()}  |  ratio={ratio_str}  |  "
         f"threshold={args.occlusion_ratio_threshold}  |  {jpath.stem}"
     )
-    cv2.putText(header, header_text, (10, 28),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, tag_color, 2, cv2.LINE_AA)
+    cv2.putText(header, occ_text, (10, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, occ_color, 2, cv2.LINE_AA)
+    if topo_tag is not None:
+        topo_color = (0, 80, 255) if topo_tag == "high topological complexity" else (0, 200, 100)
+        cv2.putText(header, f"TOPO: {topo_tag.upper()}", (10, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, topo_color, 2, cv2.LINE_AA)
     composite = np.vstack([header, grid])
 
     max_w = 4096
@@ -2154,6 +2159,7 @@ def process_file(
                 model=detector_model,
                 out_path=occ_viz_path,
                 viz_cache=occ_meta.get("_viz_cache"),
+                topo_tag=topo_tag,
             )
             if not success:
                 print(f"[WARN] Occlusion debug viz failed for {jpath.stem}")
@@ -2316,7 +2322,7 @@ def main():
     parser.add_argument("--min_total_samples", type=int, default=40,
                         help="Min pooled lane samples across all cameras to produce a tag. "
                              "Below this, defaults to 'low occlusion'.")
-    parser.add_argument("--occlusion_ratio_threshold", type=float, default=0.90,
+    parser.add_argument("--occlusion_ratio_threshold", type=float, default=0.75,
                         help="Fraction of lane samples occluded (across all cameras) at or "
                              "above which the frame is tagged 'high occlusion'.")
 
