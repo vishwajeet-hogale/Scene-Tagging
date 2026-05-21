@@ -19,7 +19,7 @@ cd /home/hogale.v/Lane_Topology/Scene_Tagging
 mkdir -p logs
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10093 \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10103 \
   --debug_viz_n 30 \
   --debug_viz_dir ./debug_viz_occlusion \
   --topo_bev_x_min -50.0 \
