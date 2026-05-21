@@ -1342,11 +1342,13 @@ def get_camera_projection_params(
         t = np.array(extrinsic.get("translation", []), dtype=np.float64).reshape(-1)
 
         if K.shape == (3, 3) and R.shape == (3, 3) and t.shape == (3,) and distortion.size >= 3:
-            # OpenCV distortion layout: [k1, k2, p1, p2, k3, ...]
-            # Taking [:3] would grab p1 (tangential) as k3. Extract by index.
+            # Distortion is stored as 3 values [k1, k2, k3] (no tangential p1/p2).
+            # OpenCV's 5-param format [k1, k2, p1, p2, k3] is NOT used by this dataset.
+            # Previously reading index 4 silently fell back to k3=0.0, causing negative
+            # radial values at large angles (side/rear cameras) and wrong projections.
             k1 = distortion[0]
             k2 = distortion[1]
-            k3 = distortion[4] if distortion.size >= 5 else 0.0
+            k3 = distortion[4] if distortion.size >= 5 else distortion[2]
             return K, np.array([k1, k2, k3], dtype=np.float64), R, t
 
     if camera_name in FIXED_CALIB:
