@@ -61,4 +61,4 @@ python add_scenario_tags.py \
 #   --topo_bev_x_min -25.0 \
 #   --topo_bev_x_max 25.0 \
 #   --topo_bev_y_min -25.0 \
-  --topo_bev_y_max 25.0
+  # --topo_bev_y_max 25.0
