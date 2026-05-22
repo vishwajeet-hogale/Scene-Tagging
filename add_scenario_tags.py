@@ -9,13 +9,13 @@ Tags written:
 - Curvature:
     "curvature_unknown"
     "straight"
-    "straight with an angle"
-    "curve left"
-    "curve right"
+    "curve"
+    "sharp curve"
 
 - Topology complexity:
     "topology_unknown"
     "low topological complexity"
+    "medium topological complexity"
     "high topological complexity"
 
 - Lighting:
@@ -472,123 +472,122 @@ def _polyline_slope_heading(xy: np.ndarray, x_mid: float, fit_half: float = 5.0)
 
 
 def compute_curvature(data: Dict[str, Any], args: argparse.Namespace) -> Tuple[str, Dict[str, Any]]:
+    segments = _get_lane_segments(data)
+    base_meta = {
+        "method": "bev_lane_segment_curvature_aggregate_v1",
+        "status": "ok",
+        "decision_source": "none",
+        "num_segments_total": len(segments),
+        "num_segments_in_bev": 0,
+        "num_segments_classified": 0,
+        "num_straight_segments": 0,
+        "num_curve_left_segments": 0,
+        "num_curve_right_segments": 0,
+        "num_sharp_left_segments": 0,
+        "num_sharp_right_segments": 0,
+        "num_curve_segments": 0,
+        "num_sharp_segments": 0,
+        "segment_tag_counts": {},
+        "bev_crop_m": {
+            "x_min": float(args.topo_bev_x_min),
+            "x_max": float(args.topo_bev_x_max),
+            "y_min": float(args.topo_bev_y_min),
+            "y_max": float(args.topo_bev_y_max),
+        },
+        "thresholds": {
+            "slope_deg": {"straight": 2.0, "angled": float(args.curv_thr_angled_deg)},
+            "kappa_m_inv": {"straight": float(args.curv_thr_straight)},
+        },
+    }
+
+    if not segments:
+        return "curvature_unknown", {
+            **base_meta,
+            "status": "no_lane_segments",
+            "decision_source": "no_lane_segments",
+        }
+
     thr_straight_rad = math.radians(2.0)
     thr_angled_rad = math.radians(args.curv_thr_angled_deg)
     thr_kappa_straight = float(args.curv_thr_straight)
 
-    thresholds_meta = {
-        "slope_deg": {"straight": 2.0, "angled": float(args.curv_thr_angled_deg)},
-        "kappa_m_inv": {"straight": thr_kappa_straight},
-    }
+    seg_tag_counts: Dict[str, int] = {}
+    for seg in segments:
+        cropped_xy = _segment_points_in_bev_box(
+            seg,
+            x_min=float(args.topo_bev_x_min),
+            x_max=float(args.topo_bev_x_max),
+            y_min=float(args.topo_bev_y_min),
+            y_max=float(args.topo_bev_y_max),
+        )
+        if len(cropped_xy) < 2:
+            continue
 
-    chain_xy, chain_info = build_ego_lane_chain(data, max_length_m=args.curv_ego_chain_max_m)
+        base_meta["num_segments_in_bev"] += 1
+        classified = _classify_single_polyline_curvature(
+            xy=cropped_xy,
+            thr_straight_rad=thr_straight_rad,
+            thr_angled_rad=thr_angled_rad,
+            thr_kappa_straight=thr_kappa_straight,
+            resample_ds=args.curv_resample_ds,
+            smooth_window=args.curv_smooth_window,
+            is_connector=bool(seg.get("is_intersection_or_connector", False)),
+        )
+        seg_tag = classified.get("curvature_tag", "curvature_unknown")
+        seg_tag_counts[seg_tag] = seg_tag_counts.get(seg_tag, 0) + 1
 
-    if len(chain_xy) < 2 or chain_info["chain_length_m"] < args.curv_ego_chain_min_m:
+        if seg_tag != "curvature_unknown":
+            base_meta["num_segments_classified"] += 1
+
+    base_meta["segment_tag_counts"] = seg_tag_counts
+    base_meta["num_straight_segments"] = int(seg_tag_counts.get("straight", 0))
+    base_meta["num_curve_left_segments"] = int(seg_tag_counts.get("curve left", 0))
+    base_meta["num_curve_right_segments"] = int(seg_tag_counts.get("curve right", 0))
+    base_meta["num_sharp_left_segments"] = int(seg_tag_counts.get("sharp left", 0))
+    base_meta["num_sharp_right_segments"] = int(seg_tag_counts.get("sharp right", 0))
+    base_meta["num_curve_segments"] = (
+        base_meta["num_curve_left_segments"] + base_meta["num_curve_right_segments"]
+    )
+    base_meta["num_sharp_segments"] = (
+        base_meta["num_sharp_left_segments"] + base_meta["num_sharp_right_segments"]
+    )
+
+    if base_meta["num_segments_in_bev"] == 0:
         return "curvature_unknown", {
-            "heading_deg": None,
-            "heading_rad": None,
-            "value_m_inv": None,
-            "method": "ego_chain_dual_signal",
-            "status": chain_info.get("status", "chain_too_short"),
-            "decision_source": "none",
-            "ego_chain": chain_info,
-            "thresholds": thresholds_meta,
+            **base_meta,
+            "status": "no_segments_in_bev",
+            "decision_source": "no_segments_in_bev",
         }
 
-    chain_xy = resample_polyline(chain_xy, ds=args.curv_resample_ds)
-    if len(chain_xy) >= max(5, args.curv_smooth_window):
-        chain_xy = smooth_polyline(chain_xy, window=args.curv_smooth_window)
+    if base_meta["num_segments_classified"] == 0:
+        return "curvature_unknown", {
+            **base_meta,
+            "status": "no_classifiable_segments_in_bev",
+            "decision_source": "no_classifiable_segments_in_bev",
+        }
 
-    x_mid = min(
-        float(chain_xy[0, 0] + chain_info["chain_length_m"] * 0.5),
-        (args.curv_forward_min + args.curv_forward_max) * 0.5,
-    )
-    h_slope = _polyline_slope_heading(chain_xy, x_mid, fit_half=5.0)
+    if base_meta["num_sharp_segments"] > 0:
+        return "sharp curve", {
+            **base_meta,
+            "decision_source": "sharp_segment_present_in_bev",
+        }
 
-    def _peak_biased_kappa(kappa_arr: np.ndarray) -> float:
-        if len(kappa_arr) < 2:
-            return float("nan")
-        mags = np.abs(kappa_arr)
-        peak_mag = float(np.percentile(mags, 75))
-        if peak_mag < 1e-9:
-            return 0.0
-        hi_mask = mags >= peak_mag * 0.5
-        if not np.any(hi_mask):
-            hi_mask = mags >= np.percentile(mags, 50)
-        sign_source = kappa_arr[hi_mask]
-        pos = float(np.sum(sign_source > 0))
-        neg = float(np.sum(sign_source < 0))
-        sign = 1.0 if pos >= neg else -1.0
-        return sign * peak_mag
+    if base_meta["num_curve_segments"] > 0:
+        return "curve", {
+            **base_meta,
+            "decision_source": "curved_segment_present_in_bev",
+        }
 
-    if len(chain_xy) >= 2:
-        seg_lens = np.linalg.norm(np.diff(chain_xy, axis=0), axis=1)
-        cum = np.concatenate(([0.0], np.cumsum(seg_lens)))
-        near_mask = cum <= 20.0
-        if int(np.sum(near_mask)) < 10 and len(chain_xy) >= 10:
-            near_mask = np.zeros(len(chain_xy), dtype=bool)
-            near_mask[:10] = True
-        chain_near = chain_xy[near_mask]
-    else:
-        chain_near = chain_xy
-    kappa, _ = curvature_samples(chain_near if len(chain_near) >= 4 else chain_xy)
-    k_chain = _peak_biased_kappa(kappa)
+    if base_meta["num_straight_segments"] > 0:
+        return "straight", {
+            **base_meta,
+            "decision_source": "all_classified_segments_straight_in_bev",
+        }
 
-    def _slope_tag(h: float) -> str:
-        if not np.isfinite(h):
-            return "unknown"
-        a = abs(h)
-        if a < thr_straight_rad:
-            return "straight"
-        if a < thr_angled_rad:
-            return "straight with an angle"
-        return "curve left" if h > 0 else "curve right"
-
-    def _kappa_tag(k: float) -> str:
-        if not np.isfinite(k):
-            return "unknown"
-        if abs(k) < thr_kappa_straight:
-            return "straight"
-        return "curve left" if k > 0 else "curve right"
-
-    slope_tag = _slope_tag(h_slope)
-    kappa_tag = _kappa_tag(k_chain)
-
-    if slope_tag == kappa_tag and slope_tag != "unknown":
-        tag = slope_tag
-        decision = "both_agree"
-    elif kappa_tag == "straight" and slope_tag == "straight with an angle":
-        tag = "straight with an angle"
-        decision = "angle_consistent_with_straight_kappa"
-    elif kappa_tag in ("curve left", "curve right") and slope_tag in ("straight", "straight with an angle", "unknown"):
-        tag = kappa_tag
-        decision = "trust_kappa_curve_over_straight_slope"
-    elif slope_tag in ("curve left", "curve right") and kappa_tag in ("straight", "unknown"):
-        tag = slope_tag
-        decision = "trust_slope_curve_over_flat_kappa"
-    elif slope_tag != "unknown":
-        tag = slope_tag
-        decision = "slope_only"
-    elif kappa_tag != "unknown":
-        tag = kappa_tag
-        decision = "kappa_only"
-    else:
-        tag = "straight"
-        decision = "default_straight_both_signals_unavailable"
-
-    return tag, {
-        "heading_rad": float(h_slope) if np.isfinite(h_slope) else None,
-        "heading_deg": float(math.degrees(h_slope)) if np.isfinite(h_slope) else None,
-        "value_m_inv": float(k_chain) if np.isfinite(k_chain) else None,
-        "method": "ego_chain_dual_signal_resolver",
-        "status": "ok",
-        "decision_source": decision,
-        "slope_tag": slope_tag,
-        "kappa_tag": kappa_tag,
-        "ego_chain": chain_info,
-        "thresholds": thresholds_meta,
-        "forward_range_m": [args.curv_forward_min, args.curv_forward_max],
-        "x_mid_used_m": float(x_mid),
+    return "curvature_unknown", {
+        **base_meta,
+        "status": "unresolved_after_aggregation",
+        "decision_source": "unresolved_after_aggregation",
     }
 
 
@@ -1877,17 +1876,23 @@ def compute_occlusion_for_frame(
 # JSON update helpers
 # =========================================================
 
-CURVATURE_TAGS = {
+FRAME_CURVATURE_TAGS = {
     "curvature_unknown",
     "straight",
+    "curve",
+    "sharp curve",
+}
+
+LEGACY_FRAME_CURVATURE_TAGS = {
+    "curves",
+    "sharp curves",
     "curve left",
     "curve right",
     "sharp left",
     "sharp right",
-}
-
-LEGACY_CURVATURE_TAGS = {
     "straight with an angle",
+    "shape_curves",
+    "sharp_curves",
     "low curvature left",
     "low curvature right",
     "medium curvature left",
@@ -1939,6 +1944,8 @@ def upsert_tag_family(tags: List[Any], new_tag: str, family_set: set) -> List[An
 
 CURVATURE_TAG_COLORS = {
     "straight": "#2ca02c",
+    "curve": "#9467bd",
+    "sharp curve": "#7f2704",
     "curve left": "#1f77b4",
     "curve right": "#d62728",
     "sharp left": "#0a2d5a",    # dark blue
@@ -1993,18 +2000,12 @@ def visualize_frame(
         wspace=0.08, hspace=0.15,
     )
 
-    h_deg = frame_curv_meta.get("heading_deg")
-    k_val = frame_curv_meta.get("value_m_inv")
-    chain_info = frame_curv_meta.get("ego_chain") or {}
-    chain_len_m = chain_info.get("chain_length_m", 0.0)
-    slope_t = frame_curv_meta.get("slope_tag") or "-"
-    kappa_t = frame_curv_meta.get("kappa_tag") or "-"
     subtitle_parts = [
-        f"heading={h_deg:+.1f}°" if isinstance(h_deg, (int, float)) else "heading=n/a",
-        f"κ={k_val:+.4f}" if isinstance(k_val, (int, float)) else "κ=n/a",
-        f"chain={chain_len_m:.1f}m",
-        f"slope={slope_t}",
-        f"kappa={kappa_t}",
+        f"bev_segs={frame_curv_meta.get('num_segments_in_bev', 0)}",
+        f"classified={frame_curv_meta.get('num_segments_classified', 0)}",
+        f"curves={frame_curv_meta.get('num_curve_segments', 0)}",
+        f"sharp={frame_curv_meta.get('num_sharp_segments', 0)}",
+        f"decision={frame_curv_meta.get('decision_source', '-')}",
     ]
     fig.suptitle(
         f"FRAME: {frame_curv_tag.upper()}    |    {' | '.join(subtitle_parts)}",
@@ -2109,6 +2110,8 @@ def visualize_frame(
 
 def update_json_fields(
     data: Dict[str, Any],
+    curvature_tag: str,
+    curvature_meta: Dict[str, Any],
     topo_tag: str,
     topo_meta: Dict[str, Any],
     lighting_tag: str,
@@ -2121,8 +2124,7 @@ def update_json_fields(
         data["scenario_tags"] = []
 
     tags = data["scenario_tags"]
-    # Remove any leftover frame-level curvature tags from previous runs
-    tags = [t for t in tags if t not in (CURVATURE_TAGS | LEGACY_CURVATURE_TAGS)]
+    tags = upsert_tag_family(tags, curvature_tag, FRAME_CURVATURE_TAGS | LEGACY_FRAME_CURVATURE_TAGS)
     tags = upsert_tag_family(tags, topo_tag, TOPOLOGY_TAGS | LEGACY_TOPOLOGY_TAGS)
     tags = upsert_tag_family(tags, lighting_tag, LIGHTING_TAGS)
     tags = upsert_tag_family(tags, occlusion_tag, OCCLUSION_TAGS)
@@ -2131,8 +2133,7 @@ def update_json_fields(
     if "scenario_meta" not in data or not isinstance(data["scenario_meta"], dict):
         data["scenario_meta"] = {}
 
-    # Remove stale frame-level curvature meta from previous runs
-    data["scenario_meta"].pop("curvature", None)
+    data["scenario_meta"]["curvature"] = curvature_meta
     data["scenario_meta"]["topology_complexity"] = topo_meta
     data["scenario_meta"]["lighting"] = lighting_meta
     data["scenario_meta"]["occlusion"] = occlusion_meta
@@ -2173,6 +2174,7 @@ def process_file(
     try:
         topology_data = load_topology_source_data(jpath, data)
 
+        frame_curv_tag, frame_curv_meta = compute_curvature(topology_data, args)
         topo_tag, topo_meta = compute_topology_complexity(topology_data, args)
 
         img_path = resolve_image_path(jpath, topology_data, camera_name=args.camera_name, ext=args.image_ext)
@@ -2217,8 +2219,8 @@ def process_file(
             visualize_frame(
                 image_path=img_path,
                 data=data,
-                frame_curv_tag="",
-                frame_curv_meta={},
+                frame_curv_tag=frame_curv_tag,
+                frame_curv_meta=frame_curv_meta,
                 per_segment=per_segment,
                 output_path=viz_path,
                 jpath=jpath,
@@ -2231,12 +2233,13 @@ def process_file(
         topo_dist_str = f"{topo_dist:5.1f}m" if isinstance(topo_dist, (int, float)) else "  n/a"
         topo_short = {
             "high topological complexity": "HIGH",
+            "medium topological complexity": "MED ",
             "low topological complexity": "LOW ",
             "topology_unknown": "UNK ",
         }.get(topo_tag, "??? ")
 
         print(
-            f"segs_tagged={len(per_segment)} | occ={occ_tag} | "
+            f"curv={frame_curv_tag} | segs_tagged={len(per_segment)} | occ={occ_tag} | "
             f"topo={topo_short} dist={topo_dist_str} | img={img_path}"
         )
 
@@ -2260,6 +2263,8 @@ def process_file(
 
         update_json_fields(
             data=data,
+            curvature_tag=frame_curv_tag,
+            curvature_meta=frame_curv_meta,
             topo_tag=topo_tag,
             topo_meta=topo_meta,
             lighting_tag=light_tag,
@@ -2274,6 +2279,7 @@ def process_file(
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
         return True, {
+            "curvature": frame_curv_tag,
             "topology": topo_tag,
             "lighting": light_tag,
             "occlusion": occ_tag,
@@ -2417,6 +2423,7 @@ def main():
     debug_viz_dir: Optional[Path] = Path(args.debug_viz_dir) if debug_mode else None
 
     ok, fail = 0, 0
+    frame_curv_counts: Dict[str, int] = {}
     topo_counts: Dict[str, int] = {}
     light_counts: Dict[str, int] = {}
     occ_counts: Dict[str, int] = {}
@@ -2428,9 +2435,11 @@ def main():
         success, result = process_file(fp, args, detector_model, debug_viz_dir=debug_viz_dir)
         if success:
             ok += 1
+            c = result["curvature"]
             t = result["topology"]
             l = result["lighting"]
             o = result["occlusion"]
+            frame_curv_counts[c] = frame_curv_counts.get(c, 0) + 1
             topo_counts[t] = topo_counts.get(t, 0) + 1
             light_counts[l] = light_counts.get(l, 0) + 1
             occ_counts[o] = occ_counts.get(o, 0) + 1
@@ -2456,6 +2465,10 @@ def main():
     print(f"Total files: {len(files)}")
     print(f"Success:     {ok}")
     print(f"Failed:      {fail}")
+
+    print("\nFrame curvature tags:")
+    for k, v in sorted(frame_curv_counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f"  {k:28s} : {v}")
 
     print("\nTopology tags:")
     for k, v in sorted(topo_counts.items(), key=lambda kv: (-kv[1], kv[0])):

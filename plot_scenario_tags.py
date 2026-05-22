@@ -58,8 +58,12 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 TAG_FAMILIES: Dict[str, List[str]] = {
-    # Curvature is a lane-segment-level property, not a frame-level tag.
-    # It lives in scenario_meta.lane_segments, not scenario_tags.
+    "curvature": [
+        "straight",
+        "curve",
+        "sharp curve",
+        "curvature_unknown",
+    ],
     "topology": [
         "low topological complexity",
         "medium topological complexity",
@@ -82,6 +86,8 @@ TAG_FAMILIES: Dict[str, List[str]] = {
 TAG_COLORS: Dict[str, str] = {
     # curvature
     "straight": "#2ca02c",
+    "curve": "#9467bd",
+    "sharp curve": "#7f2704",
     "straight with an angle": "#f0a000",
     "curve left": "#1f77b4",
     "curve right": "#d62728",
@@ -146,7 +152,7 @@ LANE_SEG_TAG_FAMILIES: Dict[str, List[str]] = {
 }
 
 EXAMPLE_TAG_FAMILIES: Dict[str, List[str]] = {
-    "curvature": LANE_SEG_TAG_FAMILIES["curvature_tag"],
+    "lane_segment_curvature": LANE_SEG_TAG_FAMILIES["curvature_tag"],
     **TAG_FAMILIES,
 }
 
@@ -381,7 +387,7 @@ def collect_example_candidates(files: List[Path]) -> Dict[str, Dict[str, List[Pa
                 if isinstance(seg, dict)
             })
             for tag in curv_tags:
-                candidates["curvature"].setdefault(tag, []).append(path)
+                candidates["lane_segment_curvature"].setdefault(tag, []).append(path)
 
     deduped: Dict[str, Dict[str, List[Path]]] = {}
     for family, tag_map in candidates.items():
@@ -505,7 +511,7 @@ def _lane_overlay_color(
     lane_seg_meta: Dict[Any, Dict[str, Any]],
     seg: Dict[str, Any],
 ) -> Tuple[int, int, int]:
-    if family == "curvature":
+    if family == "lane_segment_curvature":
         seg_id = seg.get("id")
         lane_tag = normalize_tag(
             (lane_seg_meta.get(seg_id) or {}).get("curvature_tag") or "curvature_unknown"

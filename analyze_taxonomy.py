@@ -17,7 +17,7 @@ prevalence_segments.csv : Counts / % of each tag at segment level.
 cooccurrence_frames.csv : Raw co-occurrence counts for every tag-pair
                           combination at frame level.
 association_matrix.csv  : Cramer's V pairwise association matrix for the
-                          three categorical frame-level tags.
+                          four categorical frame-level tags.
 plots/
   prevalence_frames.png
   prevalence_segments.png
@@ -61,6 +61,12 @@ except Exception:
 # -----------------------------------------------------------------------------
 
 FRAME_TAG_FAMILIES = {
+    "curvature": [
+        "straight",
+        "curve",
+        "sharp curve",
+        "curvature_unknown",
+    ],
     "topology": [
         "low topological complexity",
         "medium topological complexity",
@@ -152,6 +158,7 @@ def extract_frame_row(path: Path, data: Dict[str, Any]) -> Optional[Dict[str, An
     if not isinstance(meta, dict):
         return None
 
+    curv = meta.get("curvature") or {}
     topo = meta.get("topology_complexity") or {}
     light = meta.get("lighting") or {}
     occ = meta.get("occlusion") or {}
@@ -164,6 +171,7 @@ def extract_frame_row(path: Path, data: Dict[str, Any]) -> Optional[Dict[str, An
                 return t.strip().lower()
         return None
 
+    curv_tag = _match_tag("curvature") or "curvature_unknown"
     topo_tag = _match_tag("topology") or "topology_unknown"
     light_tag = _match_tag("lighting") or "lighting_unknown"
     occ_tag = _match_tag("occlusion") or "occlusion_unknown"
@@ -175,6 +183,20 @@ def extract_frame_row(path: Path, data: Dict[str, Any]) -> Optional[Dict[str, An
         "frame_id": frame_id_from_path(path),
         "sequence_id": sequence_id_from_path(path),
         "json_path": str(path),
+
+        # Curvature
+        "curvature_tag": curv_tag,
+        "curvature_method": curv.get("method"),
+        "curvature_status": curv.get("status"),
+        "curvature_num_segments_in_bev": curv.get("num_segments_in_bev"),
+        "curvature_num_segments_classified": curv.get("num_segments_classified"),
+        "curvature_num_straight_segments": curv.get("num_straight_segments"),
+        "curvature_num_curve_left_segments": curv.get("num_curve_left_segments"),
+        "curvature_num_curve_right_segments": curv.get("num_curve_right_segments"),
+        "curvature_num_sharp_left_segments": curv.get("num_sharp_left_segments"),
+        "curvature_num_sharp_right_segments": curv.get("num_sharp_right_segments"),
+        "curvature_num_curve_segments": curv.get("num_curve_segments"),
+        "curvature_num_sharp_segments": curv.get("num_sharp_segments"),
 
         # Topology
         "topology_tag": topo_tag,
@@ -917,7 +939,12 @@ def main() -> None:
         # Short display labels for the conditional-probability heatmap.
         # Dropped the family prefix; shortened "topological complexity" to "topo".
         short_label_map = {
+            "curvature: straight": "straight",
+            "curvature: curve": "curve",
+            "curvature: sharp curve": "sharp curve",
+            "curvature: curvature_unknown": "curv_unknown",
             "topology: low topological complexity": "low topo",
+            "topology: medium topological complexity": "med topo",
             "topology: high topological complexity": "high topo",
             "topology: topology_unknown": "topo_unknown",
             "lighting: well lit": "well lit",
@@ -964,7 +991,7 @@ def main() -> None:
         for k, v in sorted(d.items(), key=lambda kv: -kv[1]):
             print(f"     {k:32s} : {v:5d}  ({100.0 * v / total:5.1f}%)")
 
-    print("\n=== Cramer's V (frame-level 3x3) ===")
+    print("\n=== Cramer's V (frame-level 4x4) ===")
     header = "          " + "  ".join(f"{l[:10]:>10}" for l in labels)
     print(header)
     for i, lab in enumerate(labels):

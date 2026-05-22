@@ -27,38 +27,38 @@ python add_scenario_tags.py \
   --topo_bev_y_min -25.0 \
   --topo_bev_y_max 25.0
 
-python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10012 \
-  --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10012 \
-  --topo_bev_x_min -25.0 \
-  --topo_bev_x_max 25.0 \
-  --topo_bev_y_min -25.0 \
-  --topo_bev_y_max 25.0
+# python add_scenario_tags.py \
+#   --dataset_root /scratch/hogale.v/OpenLaneV2/val/10012 \
+#   --debug_viz_n 10 \
+#   --debug_viz_dir ./debug_viz_new_10012 \
+#   --topo_bev_x_min -25.0 \
+#   --topo_bev_x_max 25.0 \
+#   --topo_bev_y_min -25.0 \
+#   --topo_bev_y_max 25.0
 
-python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10112 \
-  --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10112 \
-  --topo_bev_x_min -25.0 \
-  --topo_bev_x_max 25.0 \
-  --topo_bev_y_min -25.0 \
-  --topo_bev_y_max 25.0
+# python add_scenario_tags.py \
+#   --dataset_root /scratch/hogale.v/OpenLaneV2/val/10112 \
+#   --debug_viz_n 10 \
+#   --debug_viz_dir ./debug_viz_new_10112 \
+#   --topo_bev_x_min -25.0 \
+#   --topo_bev_x_max 25.0 \
+#   --topo_bev_y_min -25.0 \
+#   --topo_bev_y_max 25.0
 
-python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10102 \
-  --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10102 \
-  --topo_bev_x_min -25.0 \
-  --topo_bev_x_max 25.0 \
-  --topo_bev_y_min -25.0 \
-  --topo_bev_y_max 25.0
+# python add_scenario_tags.py \
+#   --dataset_root /scratch/hogale.v/OpenLaneV2/val/10102 \
+#   --debug_viz_n 10 \
+#   --debug_viz_dir ./debug_viz_new_10102 \
+#   --topo_bev_x_min -25.0 \
+#   --topo_bev_x_max 25.0 \
+#   --topo_bev_y_min -25.0 \
+#   --topo_bev_y_max 25.0
 
-python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10032 \
-  --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10032 \
-  --topo_bev_x_min -25.0 \
-  --topo_bev_x_max 25.0 \
-  --topo_bev_y_min -25.0 \
+# python add_scenario_tags.py \
+#   --dataset_root /scratch/hogale.v/OpenLaneV2/val/10032 \
+#   --debug_viz_n 10 \
+#   --debug_viz_dir ./debug_viz_new_10032 \
+#   --topo_bev_x_min -25.0 \
+#   --topo_bev_x_max 25.0 \
+#   --topo_bev_y_min -25.0 \
   --topo_bev_y_max 25.0
