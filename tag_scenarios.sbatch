@@ -34,7 +34,14 @@ python add_scenario_tags.py \
 
 python plot_scenario_tags.py \
   --target_root /scratch/hogale.v/OpenLaneV2/val \
-  --output_dir ./analysis/scenario_tag_analysis_for_presentation \
+  --output_dir ./analysis/scenario_tag_analysis_for_presentation_val \
+  --examples_per_tag 20 \
+  --camera_name ring_front_center \
+  --image_ext jpg
+
+python plot_scenario_tags.py \
+  --target_root /scratch/hogale.v/OpenLaneV2/train \
+  --output_dir ./analysis/scenario_tag_analysis_for_presentation_val \
   --examples_per_tag 20 \
   --camera_name ring_front_center \
   --image_ext jpg
