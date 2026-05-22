@@ -19,36 +19,36 @@ cd /home/hogale.v/Lane_Topology/Scene_Tagging
 mkdir -p logs
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10102 \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10103 \
   --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10102 \
+  --debug_viz_dir ./debug_viz_new_10103 \
   --topo_bev_x_min -25.0 \
   --topo_bev_x_max 25.0 \
   --topo_bev_y_min -25.0 \
   --topo_bev_y_max 25.0
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10012 \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10032 \
   --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10012 \
+  --debug_viz_dir ./debug_viz_new_10032 \
   --topo_bev_x_min -25.0 \
   --topo_bev_x_max 25.0 \
   --topo_bev_y_min -25.0 \
   --topo_bev_y_max 25.0
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10112 \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10122 \
   --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10112 \
+  --debug_viz_dir ./debug_viz_new_10122 \
   --topo_bev_x_min -25.0 \
   --topo_bev_x_max 25.0 \
   --topo_bev_y_min -25.0 \
   --topo_bev_y_max 25.0
 
 python add_scenario_tags.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10102 \
+  --dataset_root /scratch/hogale.v/OpenLaneV2/val/10132 \
   --debug_viz_n 10 \
-  --debug_viz_dir ./debug_viz_new_10102 \
+  --debug_viz_dir ./debug_viz_new_10132 \
   --topo_bev_x_min -25.0 \
   --topo_bev_x_max 25.0 \
   --topo_bev_y_min -25.0 \
