@@ -1585,6 +1585,7 @@ def render_occlusion_debug_frame(
     model: Any,
     out_path: Path,
     viz_cache: Optional[Dict[str, Any]] = None,
+    curvature_tag: Optional[str] = None,
     topo_tag: Optional[str] = None,
 ) -> bool:
     """viz_cache: optional dict of {cam_name: {"boxes": ..., "lane_polys_img": ...}}
@@ -1708,7 +1709,7 @@ def render_occlusion_debug_frame(
             x0, x1 = c * cell_w, (c + 1) * cell_w
             grid[y0:y1, x0:x1] = cell
 
-    header_h = 60
+    header_h = 88
     header = np.zeros((header_h, grid.shape[1], 3), dtype=np.uint8)
     ratio_str = f"{occ_ratio:.1%}" if isinstance(occ_ratio, (int, float)) else "n/a"
     occ_color = (0, 0, 220) if occ_tag == "high occlusion" else (0, 180, 0)
@@ -1718,13 +1719,21 @@ def render_occlusion_debug_frame(
     )
     cv2.putText(header, occ_text, (10, 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, occ_color, 2, cv2.LINE_AA)
+    if curvature_tag is not None:
+        curvature_color = (
+            (0, 80, 255) if curvature_tag == "sharp curve"
+            else (180, 0, 180) if curvature_tag == "curve"
+            else (0, 200, 100)
+        )
+        cv2.putText(header, f"CURV: {curvature_tag.upper()}", (10, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, curvature_color, 2, cv2.LINE_AA)
     if topo_tag is not None:
         topo_color = (
             (0, 80, 255) if topo_tag == "high topological complexity"
             else (0, 165, 255) if topo_tag == "medium topological complexity"
             else (0, 200, 100)
         )
-        cv2.putText(header, f"TOPO: {topo_tag.upper()}", (10, 50),
+        cv2.putText(header, f"TOPO: {topo_tag.upper()}", (10, 78),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, topo_color, 2, cv2.LINE_AA)
     composite = np.vstack([header, grid])
 
@@ -2204,6 +2213,7 @@ def process_file(
                 model=detector_model,
                 out_path=occ_viz_path,
                 viz_cache=occ_meta.get("_viz_cache"),
+                curvature_tag=frame_curv_tag,
                 topo_tag=topo_tag,
             )
             if not success:
