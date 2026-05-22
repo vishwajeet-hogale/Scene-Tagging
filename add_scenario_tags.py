@@ -2352,9 +2352,9 @@ def main():
     parser.add_argument("--viz_output_dir", type=str, default=None)
 
     # topology params
-    parser.add_argument("--topo_bev_x_min", type=float, default=-5.0,
+    parser.add_argument("--topo_bev_x_min", type=float, default=-25.0,
                         help="Topology BEV crop min x (m) in ego frame.")
-    parser.add_argument("--topo_bev_x_max", type=float, default=50.0,
+    parser.add_argument("--topo_bev_x_max", type=float, default=25.0,
                         help="Topology BEV crop max x (m) in ego frame.")
     parser.add_argument("--topo_bev_y_min", type=float, default=-25.0,
                         help="Topology BEV crop min y (m) in ego frame.")
