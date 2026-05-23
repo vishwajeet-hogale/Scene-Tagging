@@ -27,8 +27,4 @@ python analyze_taxonomy.py \
   --output_dir ./analysis/taxonomy_val \
   # --skip_plots
 
-python analyze_taxonomy.py \
-  --dataset_root /scratch/hogale.v/OpenLaneV2/train \
-  --output_dir ./analysis/taxonomy_train \
-
 echo "[$(date)] Done."
